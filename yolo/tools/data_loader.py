@@ -52,6 +52,7 @@ class YoloDataset(Dataset):
         cache_path = dataset_path / f"{phase_name}.cache"
 
         if not cache_path.exists():
+            print(f"Does not exists: {cache_path}")
             logger.info(f":factory: Generating {phase_name} cache")
             data = self.filter_data(dataset_path, phase_name, self.dynamic_shape)
             torch.save(data, cache_path)
