@@ -69,6 +69,7 @@ class YoloDataset(Dataset):
                 )
                 raise e
             logger.info(f":package: Loaded {phase_name} cache, there are {len(data)} data in total.")
+            print("load_data function loaded")
         return data
 
     def filter_data(self, dataset_path: Path, phase_name: str, sort_image: bool = False) -> list:
