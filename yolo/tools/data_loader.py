@@ -49,8 +49,10 @@ class YoloDataset(Dataset):
         Returns:
             dict: The loaded data from the cache for the specified phase.
         """
-        cache_path = dataset_path / f"{phase_name}.cache"
+        # cache_path = dataset_path / f"{phase_name}.cache"
 
+        cache_path = Path("/kaggle/working/") / f"{dataset_path.name}-{phase_name}.cache"
+        
         if not cache_path.exists():
             print(f"Does not exists: {cache_path}")
             logger.info(f":factory: Generating {phase_name} cache")
