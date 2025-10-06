@@ -117,6 +117,7 @@ def scale_segmentation(
 
 
 def tensorlize(data):
+    print(data)
     try:
         img_paths, bboxes, img_ratios = zip(*data)
     except ValueError as e:
