@@ -26,6 +26,8 @@ def locate_label_paths(dataset_path: Path, phase_name: Path) -> Tuple[Path, Path
 
     txt_labels_path = dataset_path / "labels" / phase_name
 
+    print(txt_labels_path)
+
     if json_labels_path.is_file():
         return json_labels_path, "json"
 
