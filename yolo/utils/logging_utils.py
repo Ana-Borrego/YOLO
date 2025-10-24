@@ -225,9 +225,11 @@ class ImageLogger(Callback):
     def on_validation_batch_end(self, trainer: Trainer, pl_module, outputs, batch, batch_idx) -> None:
         if batch_idx != 0:
             return
-        batch_size, images, targets, rev_tensor, img_paths = batch
+        batch_size, images, targets_bboxes, targets_segments, rev_tensor, img_paths = batch
+        # And update 'targets' usage below if necessary, e.g.:
+        gt_boxes = targets_bboxes[0] if targets_bboxes.ndim == 3 else targets_bboxes
         predicts, _ = outputs
-        gt_boxes = targets[0] if targets.ndim == 3 else targets
+        # gt_boxes = targets[0] if targets.ndim == 3 else targets
         pred_boxes = predicts[0] if isinstance(predicts, list) else predicts
         images = [images[0]]
         step = trainer.current_epoch
