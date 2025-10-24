@@ -86,7 +86,7 @@ class ValidateModel(BaseModel):
         images = images.to(self.device)
         targets_bboxes = targets_bboxes.to(self.device)
         # targets_segments remain on CPU for potential GT mask generation if needed by metric format
-
+        H, W = images.shape[2:]
         # --- Get Raw Model Output ---
         with torch.no_grad():
             predicts = self.ema(images) # predicts = (detection_outputs, segmentation_outputs)
