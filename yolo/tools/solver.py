@@ -217,7 +217,7 @@ class ValidateModel(BaseModel):
         # We don't need to return predicts/mAP per step for validation like before
         # Logging happens in on_validation_epoch_end
         # Return None or necessary info if callbacks need it
-        return None # Or return something if needed by other parts of Lightning
+        return final_preds_for_metric # Or return something if needed by other parts of Lightning
 
     def on_validation_epoch_end(self):
         epoch_metrics = self.metric.compute()
