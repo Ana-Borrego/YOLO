@@ -10,6 +10,7 @@ sys.path.append(str(project_root))
 from yolo.config.config import Config
 from yolo.tools.solver import InferenceModel, TrainModel, ValidateModel
 from yolo.utils.logging_utils import setup
+from lightning.pytorch.strategies import DDPStrategy
 
 
 @hydra.main(config_path="config", config_name="config", version_base=None)
@@ -28,6 +29,7 @@ def main(cfg: Config):
         deterministic=True,
         enable_progress_bar=not getattr(cfg, "quite", False),
         default_root_dir=save_path,
+        strategy=DDPStrategy(find_unused_parameters=True)
     )
 
     if cfg.task.task == "train":

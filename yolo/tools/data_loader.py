@@ -2,7 +2,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from statistics import mean
 from threading import Event, Thread
-from typing import Generator, List, Tuple, Union
+from typing import Generator, List, Tuple, Union, Any
 
 import numpy as np
 import torch
@@ -36,7 +36,7 @@ class YoloDataset(Dataset):
         transforms = [eval(aug)(prob) for aug, prob in augment_cfg.items()]
         self.transform = AugmentationComposer(transforms, self.image_size, self.base_size)
         self.transform.get_more_data = self.get_more_data
-        self.img_paths, self.bboxes, self.ratios = tensorlize(self.load_data(Path(dataset_cfg.path), phase_name))
+        self.img_paths, self.bboxes, self.segments, self.ratios = tensorlize(self.load_data(Path(dataset_cfg.path), phase_name)) ## MODIFICADO PARA RECOGER SEGMENTOS.
 
     def load_data(self, dataset_path: Path, phase_name: str):
         """
@@ -49,7 +49,10 @@ class YoloDataset(Dataset):
         Returns:
             dict: The loaded data from the cache for the specified phase.
         """
-        cache_path = dataset_path / f"{phase_name}.pache"
+        cache_path = dataset_path / f"{phase_name}.cache"
+        
+        # Using in kaggle
+        # cache_path = Path("/kaggle/working/") / f"{dataset_path.name}-{phase_name}.cache"
 
         if not cache_path.exists():
             logger.info(f":factory: Generating {phase_name} cache")
@@ -127,7 +130,7 @@ class YoloDataset(Dataset):
                     width, height = img.size
             else:
                 width, height = 0, 1
-            data.append((img_path, labels, width / height))
+            data.append((img_path, labels, image_seg_annotations, width / height)) ### GUARDAR LOS POLÍGONOS.
             if len(image_seg_annotations) != 0:
                 valid_inputs += 1
 
@@ -163,12 +166,12 @@ class YoloDataset(Dataset):
             logger.warning(f"No valid BBox in {label_path}")
             return torch.zeros((0, 5))
 
-    def get_data(self, idx):
-        img_path, bboxes = self.img_paths[idx], self.bboxes[idx]
+    def get_data(self, idx): # MODIFICADO PARA OBTENER SEGMENTOS
+        img_path, bboxes, segments = self.img_paths[idx], self.bboxes[idx], self.segments[idx]
         valid_mask = bboxes[:, 0] != -1
         with Image.open(img_path) as img:
             img = img.convert("RGB")
-        return img, torch.from_numpy(bboxes[valid_mask]), img_path
+        return img, torch.from_numpy(bboxes[valid_mask]), segments, img_path
 
     def get_more_data(self, num: int = 1):
         indices = torch.randint(0, len(self), (num,))
@@ -183,8 +186,8 @@ class YoloDataset(Dataset):
         self.image_size = [int(self.base_size + shift), int(self.base_size - shift)]
         self.transform.pad_resize.set_size(self.image_size)
 
-    def __getitem__(self, idx) -> Tuple[Image.Image, Tensor, Tensor, List[str]]:
-        img, bboxes, img_path = self.get_data(idx)
+    def __getitem__(self, idx): #-> Tuple[Image.Image, Tensor, List, Tensor, List[str]]: # MODIFICADO PARA DEVOLVER SEGMENTOS
+        img, bboxes, segments, img_path = self.get_data(idx)
 
         if self.dynamic_shape:
             self._update_image_size(idx)
@@ -192,13 +195,14 @@ class YoloDataset(Dataset):
         img, bboxes, rev_tensor = self.transform(img, bboxes)
         bboxes[:, [1, 3]] *= self.image_size[0]
         bboxes[:, [2, 4]] *= self.image_size[1]
-        return img, bboxes, rev_tensor, img_path
+        return img, bboxes, segments, rev_tensor, img_path
 
     def __len__(self) -> int:
         return len(self.bboxes)
 
 
-def collate_fn(batch: List[Tuple[Tensor, Tensor]]) -> Tuple[Tensor, List[Tensor]]:
+def collate_fn(batch: List[Tuple[Tensor, Tensor, Any, Tensor, Path]]): #-> Tuple[Tensor, List[Tensor]]: # MODIFICADO PARA OBTENER SEGMENTOS
+# (batch: List[Tuple[Tensor, Tensor]]): -> Tuple[Tensor, List[Tensor]]: 
     """
     A collate function to handle batching of images and their corresponding targets.
 
@@ -212,20 +216,21 @@ def collate_fn(batch: List[Tuple[Tensor, Tensor]]) -> Tuple[Tensor, List[Tensor]
             - A tensor of batched images.
             - A list of tensors, each corresponding to bboxes for each image in the batch.
     """
+    batch_images, in_bboxes, in_segments, batch_reverse, batch_path = zip(*batch)
     batch_size = len(batch)
-    target_sizes = [item[1].size(0) for item in batch]
-    # TODO: Improve readability of these process
-    # TODO: remove maxBbox or reduce loss function memory usage
+    target_sizes = [item.size(0) for item in in_bboxes]
     batch_targets = torch.zeros(batch_size, min(max(target_sizes), 100), 5)
     batch_targets[:, :, 0] = -1
     for idx, target_size in enumerate(target_sizes):
-        batch_targets[idx, : min(target_size, 100)] = batch[idx][1][:100]
+        # batch_targets[idx, : min(target_size, 100)] = batch[idx][1][:100]
+        # MODIFICACIÓN: Using in_bboxes[idx] in both the size calculation and the assignment ensures consistency and fixes the bug, as it guarantees you're always referring to the exact same tensor extracted by zip.
+        n_bboxes_to_copy = min(target_size, 100) 
+        batch_targets[idx, :n_bboxes_to_copy] = in_bboxes[idx][:n_bboxes_to_copy]
 
-    batch_images, _, batch_reverse, batch_path = zip(*batch)
     batch_images = torch.stack(batch_images)
     batch_reverse = torch.stack(batch_reverse)
 
-    return batch_size, batch_images, batch_targets, batch_reverse, batch_path
+    return batch_size, batch_images, batch_targets, list(in_segments), batch_reverse, batch_path
 
 
 def create_dataloader(data_cfg: DataConfig, dataset_cfg: DatasetConfig, task: str = "train"):

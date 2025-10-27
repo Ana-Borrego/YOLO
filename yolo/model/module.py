@@ -159,8 +159,25 @@ class MultiheadSegmentation(nn.Module):
         )
         self.heads.append(Conv(proto_channels, num_maskes, 1))
 
-    def forward(self, x_list: List[torch.Tensor]) -> List[torch.Tensor]:
-        return [head(x) for x, head in zip(x_list, self.heads)]
+    # def forward(self, x_list: List[torch.Tensor]) -> List[torch.Tensor]:
+    #     return [head(x) for x, head in zip(x_list, self.heads)]
+    
+    def forward(self, x_list: List[torch.Tensor]) -> Tuple[List[Tuple[Tensor]], List[Tensor]]:
+        # x_list contiene las feature maps [P3, P4, P5, Proto_Input]
+        
+        # 1. Obtener salidas de detección (cajas, clases) de los primeros N feature maps
+        detection_outputs = self.detect(x_list[:-1]) # Lista de [(cls, anc, box), ...]
+        
+        # 2. Obtener coeficientes de máscara y prototipos
+        segmentation_head_outputs = []
+        # Iterar sobre las cabezas de máscara (para P3, P4, P5) y la cabeza de prototipos
+        for i, head in enumerate(self.heads):
+            segmentation_head_outputs.append(head(x_list[i])) 
+            # outputs[0..N-1] serán coeficientes [B, M, h, w]
+            # outputs[N] serán prototipos [B, M, H, W]
+            
+        # Devolver ambas partes
+        return detection_outputs, segmentation_head_outputs
 
 
 class Anchor2Vec(nn.Module):

@@ -68,7 +68,7 @@ class YOLORichProgressBar(RichProgressBar):
             self._reset_progress_bar_ids()
             reconfigure(**self._console_kwargs)
             self._console = Console()
-            self._console.clear_live()
+            # self._console.clear_live()
             self.progress = YOLOCustomProgress(
                 *self.configure_columns(trainer),
                 auto_refresh=False,
@@ -107,7 +107,7 @@ class YOLORichProgressBar(RichProgressBar):
         epoch_descript = "[cyan]Train [white]|"
         batch_descript = "[green]Train [white]|"
         metrics = self.get_metrics(trainer, pl_module)
-        metrics.pop("v_num")
+        metrics.pop("v_num", None)
         for metrics_name, metrics_val in metrics.items():
             if "Loss_step" in metrics_name:
                 epoch_descript += f"{metrics_name.removesuffix('_step').split('/')[1]: ^9}|"
@@ -225,10 +225,25 @@ class ImageLogger(Callback):
     def on_validation_batch_end(self, trainer: Trainer, pl_module, outputs, batch, batch_idx) -> None:
         if batch_idx != 0:
             return
-        batch_size, images, targets, rev_tensor, img_paths = batch
-        predicts, _ = outputs
-        gt_boxes = targets[0] if targets.ndim == 3 else targets
-        pred_boxes = predicts[0] if isinstance(predicts, list) else predicts
+        batch_size, images, targets_bboxes, targets_segments, rev_tensor, img_paths = batch
+        # And update 'targets' usage below if necessary, e.g.:
+        gt_boxes = targets_bboxes[0] if targets_bboxes.ndim == 3 else targets_bboxes
+        if not outputs: # Handle cases where validation_step might return an empty list
+            return 
+        
+        first_image_preds_dict = outputs[0] 
+
+        # Extract GT boxes for the first image
+        gt_boxes = targets_bboxes[0] if targets_bboxes.ndim == 3 else targets_bboxes[0, targets_bboxes[0, :, 0] != -1] # Select first image & filter padding
+
+        # Extract predicted boxes and scores from the first image's prediction dictionary
+        # Convert the dictionary format back to a tensor [N, 6] for log_bbox
+        pred_boxes_tensor = torch.cat([
+            first_image_preds_dict["labels"].unsqueeze(-1).float(), # Class ID
+            first_image_preds_dict["boxes"],                       # x1, y1, x2, y2
+            first_image_preds_dict["scores"].unsqueeze(-1)         # Confidence
+        ], dim=1)
+        pred_boxes = pred_boxes_tensor # Use this tensor for logging
         images = [images[0]]
         step = trainer.current_epoch
         for logger in trainer.loggers:

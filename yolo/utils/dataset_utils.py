@@ -116,9 +116,9 @@ def scale_segmentation(
     return seg_array_with_cat
 
 
-def tensorlize(data):
+def tensorlize(data): ### MODIFICADA PARA QUE DEVUELVA POLÍGONOS.
     try:
-        img_paths, bboxes, img_ratios = zip(*data)
+        img_paths, bboxes, segments, img_ratios = zip(*data)
     except ValueError as e:
         logger.error(
             ":rotating_light: This may be caused by using old cache or another version of YOLO's cache.\n"
@@ -134,4 +134,4 @@ def tensorlize(data):
     bboxes = np.stack(padded_bbox_list)
     img_paths = np.array(img_paths)
     img_ratios = np.array(img_ratios)
-    return img_paths, bboxes, img_ratios
+    return img_paths, bboxes, segments, img_ratios
