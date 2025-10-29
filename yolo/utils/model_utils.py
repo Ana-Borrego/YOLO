@@ -48,14 +48,17 @@ class EMA(Callback):
 
     def setup(self, trainer, pl_module, stage):
         pl_module.ema = deepcopy(pl_module.model)
-        self.tau /= trainer.world_size
+        self.tau /= trainer.world_size # type: ignore
         for param in pl_module.ema.parameters():
             param.requires_grad = False
-
+        
+        # Mover la inicialización de state_dict aquí
+        self.ema_state_dict = deepcopy(pl_module.model.state_dict())
+        
     def on_validation_start(self, trainer: "Trainer", pl_module: "LightningModule"):
-        if self.ema_state_dict is None:
-            self.ema_state_dict = deepcopy(pl_module.model.state_dict())
-        pl_module.ema.load_state_dict(self.ema_state_dict)
+        # Ya no necesitamos comprobar si es None, solo cargar el estado actual
+        if self.ema_state_dict: # Asegurarse de que no sea None (aunque setup ya lo hizo)
+             pl_module.ema.load_state_dict(self.ema_state_dict)
 
     @no_grad()
     def on_train_batch_end(self, trainer: "Trainer", pl_module: "LightningModule", *args, **kwargs) -> None:
