@@ -53,7 +53,8 @@ class EMA(Callback):
             param.requires_grad = False
         
         # Mover la inicialización de state_dict aquí
-        self.ema_state_dict = deepcopy(pl_module.model.state_dict())
+        model_state_dict = pl_module.model.state_dict()
+        self.ema_state_dict = {k: v.clone().to(pl_module.device) for k, v in model_state_dict.items()}
         
     def on_validation_start(self, trainer: "Trainer", pl_module: "LightningModule"):
         # Ya no necesitamos comprobar si es None, solo cargar el estado actual
@@ -64,8 +65,19 @@ class EMA(Callback):
     def on_train_batch_end(self, trainer: "Trainer", pl_module: "LightningModule", *args, **kwargs) -> None:
         self.step += 1
         decay_factor = self.decay * (1 - exp(-self.step / self.tau))
+        
+        # Asegurarse de que param esté en el mismo dispositivo que ema_state_dict
+        # (Aunque deberían estarlo si pl_module.device es correcto)
         for key, param in pl_module.model.state_dict().items():
-            self.ema_state_dict[key] = lerp(param.detach(), self.ema_state_dict[key], decay_factor)
+             if key in self.ema_state_dict:
+                  param_detached = param.detach()
+                  # Asegurar que ambos estén en el mismo dispositivo antes de lerp
+                  if param_detached.device != self.ema_state_dict[key].device:
+                       param_detached = param_detached.to(self.ema_state_dict[key].device)
+                       
+                  self.ema_state_dict[key] = lerp(param_detached, self.ema_state_dict[key], decay_factor) # type: ignore
+             else:
+                  logger.warning(f"Clave {key} no encontrada en EMA state_dict. Omitiendo.")
 
 
 def create_optimizer(model: YOLO, optim_cfg: OptimizerConfig) -> Optimizer:
