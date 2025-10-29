@@ -190,7 +190,10 @@ class BoxMatcher:
         T = target_cls.shape[1]
         # Expandir target_cls para indexar predict_cls
         # target_cls [B, T] -> [B, T, 1] -> [B, T, A]
-        idx = target_cls.unsqueeze(-1).expand(B, T, A)
+        # Asegurarse de que target_cls sea Long y clampear los índices negativos a 0
+        # El padding -1.0 se convierte en índice -1 (long), lo clampeamos a 0
+        idx = target_cls.long().clamp_(min=0)
+        # .clamp_(min=0): Cambia in situ todos los valores negativos (-1) a 0. Ahora, todos los índices en idx son >= 0.
         
         # Usar gather para seleccionar las probabilidades correctas
         # predict_cls [B, A, C] -> [B, C, A] para poder usar gather en dim=1 (clases)
