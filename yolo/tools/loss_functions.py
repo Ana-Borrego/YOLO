@@ -207,6 +207,29 @@ class YOLOSegmentationLoss:
         else:
             padded_targets = torch.empty((batch_size, 0, 5), device=device)
         
+        # --- INICIO DEBUG: Verificar padded_targets ---
+        print("\n--- DEBUG: Verificando padded_targets antes del Matcher ---")
+        print(f"Forma de padded_targets: {padded_targets.shape}")
+        if padded_targets.numel() > 0:
+            target_cls_values = padded_targets[..., 0] # Extraer solo la columna de clase
+            # Filtrar el padding (-1) antes de buscar min/max
+            valid_cls_mask = target_cls_values != -1.0
+            if valid_cls_mask.any():
+                 valid_classes = target_cls_values[valid_cls_mask]
+                 print(f"Clase mínima encontrada: {valid_classes.min().item()}")
+                 print(f"Clase máxima encontrada: {valid_classes.max().item()}")
+                 # Comprobar si hay clases fuera del rango esperado [0, class_num-1]
+                 if valid_classes.min() < 0 or valid_classes.max() >= self.class_num:
+                      print(f"¡¡¡ERROR!!! Clases fuera del rango [0, {self.class_num-1}] detectadas.")
+                      # Opcional: imprimir las clases problemáticas
+                      # print(f"Clases problemáticas: {valid_classes[(valid_classes < 0) | (valid_classes >= self.class_num)]}")
+            else:
+                 print("Solo se encontraron valores de padding (-1) en las clases.")
+        else:
+            print("padded_targets está vacío.")
+        print("--- FIN DEBUG ---")
+        
+        # FALLO AL LLAMAR AL MATCHER SI HAY CLASES INVÁLIDAS.
         align_targets, valid_masks, gt_indices = self.matcher(padded_targets, (predicts_cls.detach(), predicts_box_xyxy.detach()))
         targets_cls, targets_bbox = align_targets.split((self.class_num, 4), dim=-1)
 

@@ -366,6 +366,11 @@ class BoxMatcher:
 
         # get cls matrix (cls prob with each gt class and each predict class)
         cls_mat = self.get_cls_matrix(predict_cls.sigmoid(), target_cls) # [B, T, A]
+        
+        # La función get_cls_matrix usa torch.gather para seleccionar las probabilidades de clase predichas (predict_cls) 
+        # usando los índices de las clases reales (target_cls). Si algún índice en target_cls es negativo o 
+        # mayor o igual que el número de clases (self.class_num), la operación gather en la GPU fallará con 
+        # este assert triggered. -- DEBUGGEO EN YOLOSegmentationLoss para inspeccionar padded_targets. (Error CUDA índice)
 
         target_matrix = (iou_mat ** self.factor["iou"]) * (cls_mat ** self.factor["cls"]) # [B, T, A]
 
