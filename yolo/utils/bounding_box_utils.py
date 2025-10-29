@@ -188,17 +188,31 @@ class BoxMatcher:
         # predict_cls es [B, A, C], target_cls es [B, T]
         B, A, C = predict_cls.shape
         T = target_cls.shape[1]
-        # Expandir target_cls para indexar predict_cls
-        # target_cls [B, T] -> [B, T, 1] -> [B, T, A]
-        # Asegurarse de que target_cls sea Long y clampear los índices negativos a 0
-        # El padding -1.0 se convierte en índice -1 (long), lo clampeamos a 0
-        idx = target_cls.long().clamp_(min=0)
-        # .clamp_(min=0): Cambia in situ todos los valores negativos (-1) a 0. Ahora, todos los índices en idx son >= 0.
+        # 1. Preparar índices (idx)
+        idx = target_cls.long().clamp_(min=0) # [B, T]
+        # Expandir idx para gather
+        # Queremos seleccionar C de [B, A, C] para cada T
+        # idx: [B, T] -> [B, T, 1] -> [B, T, A]
+        idx = idx.unsqueeze(-1).expand(B, T, A) 
         
-        # Usar gather para seleccionar las probabilidades correctas
-        # predict_cls [B, A, C] -> [B, C, A] para poder usar gather en dim=1 (clases)
-        cls_probabilities = torch.gather(predict_cls.transpose(1, 2), 1, idx)
-        return cls_probabilities
+        # 2. Preparar predicciones (input)
+        # predict_cls: [B, A, C] -> [B, 1, A, C]
+        # (Expandir en la dimensión T (targets))
+        predict_cls_expanded = predict_cls.unsqueeze(1)
+        # predict_cls_expanded: [B, 1, A, C] -> [B, T, A, C]
+        # (Repetir las predicciones para cada target)
+        predict_cls_expanded = predict_cls_expanded.expand(B, T, A, C) 
+        
+        # 3. Gather
+        # idx: [B, T, A] -> [B, T, A, 1]
+        idx = idx.unsqueeze(-1)
+        
+        # torch.gather(input=[B, T, A, C], dim=3 (dim C), index=[B, T, A, 1])
+        # Resultado será [B, T, A, 1]
+        cls_probabilities = torch.gather(predict_cls_expanded, 3, idx)
+        
+        # 4. Resultado
+        return cls_probabilities.squeeze(-1) # [B, T, A]
 
     def get_iou_matrix(self, predict_bbox, target_bbox) -> Tensor:
         """
