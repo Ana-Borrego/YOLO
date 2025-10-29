@@ -11,7 +11,7 @@ from yolo.tools.data_conversion import discretize_categories
 from yolo.utils.logger import logger
 
 
-def locate_label_paths(dataset_path: Path, phase_name: Path) -> Tuple[Path, Path]:
+def locate_label_paths(dataset_path: Path, phase_name: str) -> Tuple[Optional[Path | List], Optional[str]]:
     """
     Find the path to label files for a specified dataset and phase(e.g. training).
 
@@ -38,7 +38,7 @@ def locate_label_paths(dataset_path: Path, phase_name: Path) -> Tuple[Path, Path
     return [], None
 
 
-def create_image_metadata(labels_path: str) -> Tuple[Dict[str, List], Dict[str, Dict]]:
+def create_image_metadata(labels_path: Path) -> Tuple[Dict[str, List], Dict[str, Dict]]:
     """
     Create a dictionary containing image information and annotations indexed by image ID.
 
@@ -114,24 +114,3 @@ def scale_segmentation(
         seg_array_with_cat.append(scaled_flat_seg_data)
 
     return seg_array_with_cat
-
-
-def tensorlize(data):
-    try:
-        img_paths, bboxes, img_ratios = zip(*data)
-    except ValueError as e:
-        logger.error(
-            ":rotating_light: This may be caused by using old cache or another version of YOLO's cache.\n"
-            ":rotating_light: Please clean the cache and try running again."
-        )
-        raise e
-    max_box = max(bbox.size(0) for bbox in bboxes)
-    padded_bbox_list = []
-    for bbox in bboxes:
-        padding = torch.full((max_box, 5), -1, dtype=torch.float32)
-        padding[: bbox.size(0)] = bbox
-        padded_bbox_list.append(padding)
-    bboxes = np.stack(padded_bbox_list)
-    img_paths = np.array(img_paths)
-    img_ratios = np.array(img_ratios)
-    return img_paths, bboxes, img_ratios

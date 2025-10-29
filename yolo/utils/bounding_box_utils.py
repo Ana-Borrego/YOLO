@@ -100,11 +100,11 @@ def transform_bbox(bbox: Tensor, indicator="xywh -> xyxy"):
         y_max = bbox[..., 1] + bbox[..., 3] / 2
 
     if out_type == "xywh":
-        bbox = torch.stack([x_min, y_min, x_max - x_min, y_max - y_min], dim=-1)
+        bbox = torch.stack([x_min, y_min, x_max - x_min, y_max - y_min], dim=-1) # type:ignore
     elif out_type == "xyxy":
         bbox = torch.stack([x_min, y_min, x_max, y_max], dim=-1)
     elif out_type == "xycwh":
-        bbox = torch.stack([(x_min + x_max) / 2, (y_min + y_max) / 2, x_max - x_min, y_max - y_min], dim=-1)
+        bbox = torch.stack([(x_min + x_max) / 2, (y_min + y_max) / 2, x_max - x_min, y_max - y_min], dim=-1) # type:ignore
 
     return bbox.to(dtype=data_type)
 
@@ -146,8 +146,10 @@ class BoxMatcher:
         self.class_num = class_num
         self.vec2box = vec2box
         self.reg_max = reg_max
-        for attr_name in cfg:
-            setattr(self, attr_name, cfg[attr_name])
+        
+        self.iou = getattr(cfg, "iou", "iou")
+        self.topk = getattr(cfg, "topk", 10)
+        self.factor = getattr(cfg, "factor", {"iou": 1.0, "cls": 1.0})
 
     def get_valid_matrix(self, target_bbox: Tensor):
         """
@@ -183,9 +185,16 @@ class BoxMatcher:
         Returns:
             [batch x targets x anchors]: The probabilities from `pred_cls` corresponding to the class indices specified in `target_cls`.
         """
-        predict_cls = predict_cls.transpose(1, 2)
-        target_cls = target_cls.expand(-1, -1, predict_cls.size(2))
-        cls_probabilities = torch.gather(predict_cls, 1, target_cls)
+        # predict_cls es [B, A, C], target_cls es [B, T]
+        B, A, C = predict_cls.shape
+        T = target_cls.shape[1]
+        # Expandir target_cls para indexar predict_cls
+        # target_cls [B, T] -> [B, T, 1] -> [B, T, A]
+        idx = target_cls.unsqueeze(-1).expand(B, T, A)
+        
+        # Usar gather para seleccionar las probabilidades correctas
+        # predict_cls [B, A, C] -> [B, C, A] para poder usar gather en dim=1 (clases)
+        cls_probabilities = torch.gather(predict_cls.transpose(1, 2), 1, idx)
         return cls_probabilities
 
     def get_iou_matrix(self, predict_bbox, target_bbox) -> Tensor:
@@ -198,6 +207,8 @@ class BoxMatcher:
         Returns:
             [batch x targets x predicts]: The IoU scores between each target and predicted.
         """
+        # target_bbox: [B, T, 4], predict_bbox: [B, A, 4]
+        # Salida esperada: [B, T, A]
         return calculate_iou(target_bbox, predict_bbox, self.iou).clamp(0, 1)
 
     def filter_topk(self, target_matrix: Tensor, grid_mask: Tensor, topk: int = 10) -> Tuple[Tensor, Tensor]:
@@ -213,14 +224,19 @@ class BoxMatcher:
             topk_targets [batch x targets x anchors]: Only leave the topk targets for each anchor
             topk_mask [batch x targets x anchors]: A boolean mask indicating the top-k scores' positions.
         """
-        masked_target_matrix = grid_mask * target_matrix
+        # target_matrix, grid_mask: [B, T, A]
+        masked_target_matrix = torch.where(grid_mask, target_matrix, torch.tensor(0.0, device=target_matrix.device))
+        
+        # Queremos top T anchors para cada GT, así que usamos topk en la dim A (-1)
+        topk = min(topk, masked_target_matrix.shape[-1]) # Asegurar que topk no sea mayor que el número de anchors
         values, indices = masked_target_matrix.topk(topk, dim=-1)
+        
         topk_targets = torch.zeros_like(target_matrix, device=target_matrix.device)
         topk_targets.scatter_(dim=-1, index=indices, src=values)
-        topk_mask = topk_targets > 0
+        topk_mask = topk_targets > 1e-9 # Usar un umbral pequeño en lugar de > 0
         return topk_targets, topk_mask
 
-    def ensure_one_anchor(self, target_matrix: Tensor, topk_mask: tensor) -> Tensor:
+    def ensure_one_anchor(self, target_matrix: Tensor, topk_mask: tensor) -> Tensor: # type:ignore
         """
         Ensures each valid target gets at least one anchor matched based on the unmasked target matrix,
         which enables an otherwise invalid match. This enables too small or too large targets to be
@@ -233,13 +249,29 @@ class BoxMatcher:
         Returns:
             topk_mask [batch x targets x anchors]: A boolean mask indicating the updated top-k scores' positions.
         """
-        values, indices = target_matrix.max(dim=-1)
+        # Encontrar el mejor anchor para cada target (GT)
+        values, indices = target_matrix.max(dim=-1, keepdim=True) # indices shape [B, T, 1]
+        
         best_anchor_mask = torch.zeros_like(target_matrix, dtype=torch.bool)
-        best_anchor_mask.scatter_(-1, index=indices[..., None], src=~best_anchor_mask)
-        matched_anchor_num = torch.sum(topk_mask, dim=-1)
-        target_without_anchor = (matched_anchor_num == 0) & (values > 0)
-        topk_mask = torch.where(target_without_anchor[..., None], best_anchor_mask, topk_mask)
-        return topk_mask
+        # Usar scatter_ para marcar el mejor anchor para cada GT
+        best_anchor_mask.scatter_(-1, index=indices, value=True) 
+
+        # Cuántos anchors tiene asignado cada GT después del topk?
+        matched_anchor_num_per_gt = torch.sum(topk_mask, dim=-1) # shape [B, T]
+        
+        # Identificar GTs que son válidos (tienen alguna puntuación > 0) pero no tienen anchors asignados
+        gt_is_valid = values.squeeze(-1) > 1e-9 # shape [B, T]
+        target_without_anchor = (matched_anchor_num_per_gt == 0) & gt_is_valid # shape [B, T]
+        
+        # Para esos GTs, forzar la asignación a su mejor anchor
+        # Expandir target_without_anchor para que tenga la misma forma que topk_mask
+        force_assign_mask = target_without_anchor.unsqueeze(-1).expand_as(topk_mask) # [B, T, A]
+
+        # Combinar la máscara original con la máscara de asignación forzada
+        # Solo forzamos la asignación donde best_anchor_mask es True
+        updated_topk_mask = topk_mask | (force_assign_mask & best_anchor_mask)
+
+        return updated_topk_mask
 
     def filter_duplicates(self, iou_mat: Tensor, topk_mask: Tensor):
         """
@@ -254,16 +286,40 @@ class BoxMatcher:
             valid_mask [batch x anchors]: Mask indicating the validity of each anchor
             topk_mask [batch x targets x anchors]: A boolean mask indicating the updated top-k scores' positions.
         """
-        duplicates = (topk_mask.sum(1, keepdim=True) > 1).repeat([1, topk_mask.size(1), 1])
-        masked_iou_mat = topk_mask * iou_mat
-        best_indices = masked_iou_mat.argmax(1)[:, None, :]
-        best_target_mask = torch.zeros_like(duplicates, dtype=torch.bool)
-        best_target_mask.scatter_(1, index=best_indices, src=~best_target_mask)
-        topk_mask = torch.where(duplicates, best_target_mask, topk_mask)
-        unique_indices = topk_mask.to(torch.uint8).argmax(dim=1)
-        return unique_indices[..., None], topk_mask.any(dim=1), topk_mask
+        # iou_mat, topk_mask: [B, T, A]
+        
+        # Cuántos GTs están asignados a cada anchor?
+        num_gts_per_anchor = topk_mask.sum(dim=1, keepdim=True) # shape [B, 1, A]
+        
+        # Marcar anchors que tienen más de un GT asignado
+        duplicates = (num_gts_per_anchor > 1) # shape [B, 1, A]
+        
+        # Poner a 0 los IoUs que no están en topk_mask
+        masked_iou_mat = torch.where(topk_mask, iou_mat, torch.tensor(0.0, device=iou_mat.device))
+        
+        # Encontrar el GT con el IoU más alto para CADA anchor
+        # masked_iou_mat [B, T, A] -> argmax(dim=1) -> [B, A]
+        best_gt_indices_for_anchor = masked_iou_mat.argmax(dim=1) # shape [B, A]
+        
+        # Crear una máscara que solo sea True para el mejor GT de cada anchor
+        best_target_mask = torch.zeros_like(topk_mask, dtype=torch.bool)
+        # Usamos scatter_ en la dimensión 1 (GTs)
+        best_target_mask.scatter_(1, index=best_gt_indices_for_anchor.unsqueeze(1), value=True)
 
-    def __call__(self, target: Tensor, predict: Tuple[Tensor]) -> Tuple[Tensor, Tensor]:
+        # Si un anchor tenía duplicados, solo mantenemos la asignación al mejor GT (según IoU).
+        # Si no tenía duplicados, mantenemos la asignación original.
+        final_mask = torch.where(duplicates.expand_as(topk_mask), best_target_mask, topk_mask) # [B, T, A]
+
+        # Encontrar el índice del GT asignado a cada anchor (será 0 si no hay ninguno asignado)
+        # Esto funciona porque final_mask ahora tiene como máximo un True por columna (anchor)
+        assigned_gt_indices = final_mask.to(torch.int8).argmax(dim=1) # shape [B, A]
+        
+        # Máscara de validez: True si el anchor tiene algún GT asignado
+        valid_anchor_mask = final_mask.any(dim=1) # shape [B, A]
+
+        return assigned_gt_indices, valid_anchor_mask, final_mask
+
+    def __call__(self, target: Tensor, predict: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]: 
         """Matches each target to the most suitable anchor.
         1. For each anchor prediction, find the highest suitability targets.
         2. Match target to the best anchor.
@@ -283,56 +339,97 @@ class BoxMatcher:
             valid_mask: Bool tensor of shape [batch x anchors].
                 True if a anchor has a target/gt assigned to it.
         """
-        predict_cls, predict_bbox = predict
+        predict_cls, predict_bbox = predict # cls: [B, A, C], bbox: [B, A, 4] (xyxy)
 
         # return if target has no gt information.
         n_targets = target.shape[1]
+        B, A, C = predict_cls.shape
+        device = predict_bbox.device
+
         if n_targets == 0:
-            device = predict_bbox.device
             align_cls = torch.zeros_like(predict_cls, device=device)
             align_bbox = torch.zeros_like(predict_bbox, device=device)
-            valid_mask = torch.zeros(predict_cls.shape[:2], dtype=bool, device=device)
+            valid_mask = torch.zeros((B, A), dtype=torch.bool, device=device)
+            gt_indices = torch.full((B, A), -1, dtype=torch.long, device=device) # Devolver -1 para no asignados
             anchor_matched_targets = torch.cat([align_cls, align_bbox], dim=-1)
-            return anchor_matched_targets, valid_mask
+            # --- Devolver 3 elementos ---
+            return anchor_matched_targets, valid_mask, gt_indices
 
-        target_cls, target_bbox = target.split([1, 4], dim=-1)  # B x N x (C B) -> B x N x C, B x N x B
-        target_cls = target_cls.long().clamp(0)
+        target_cls, target_bbox = target.split([1, 4], dim=-1)  # cls: [B, T, 1], bbox: [B, T, 4] (xyxy)
+        target_cls = target_cls.long().squeeze(-1) # -> [B, T]
 
         # get valid matrix (each gt appear in which anchor grid)
-        grid_mask = self.get_valid_matrix(target_bbox)
+        grid_mask = self.get_valid_matrix(target_bbox) # [B, T, A]
 
         # get iou matrix (iou with each gt bbox and each predict anchor)
-        iou_mat = self.get_iou_matrix(predict_bbox, target_bbox)
+        iou_mat = self.get_iou_matrix(predict_bbox, target_bbox) # [B, T, A]
 
         # get cls matrix (cls prob with each gt class and each predict class)
-        cls_mat = self.get_cls_matrix(predict_cls.sigmoid(), target_cls)
+        cls_mat = self.get_cls_matrix(predict_cls.sigmoid(), target_cls) # [B, T, A]
 
-        target_matrix = (iou_mat ** self.factor["iou"]) * (cls_mat ** self.factor["cls"])
+        target_matrix = (iou_mat ** self.factor["iou"]) * (cls_mat ** self.factor["cls"]) # [B, T, A]
 
-        # choose topk
-        topk_targets, topk_mask = self.filter_topk(target_matrix, grid_mask, topk=self.topk)
+        # choose topk anchors for each GT based on target_matrix
+        _, topk_mask = self.filter_topk(target_matrix, grid_mask, topk=self.topk) # [B, T, A]
 
         # match best anchor to valid targets without valid anchors
-        topk_mask = self.ensure_one_anchor(target_matrix, topk_mask)
+        topk_mask = self.ensure_one_anchor(target_matrix, topk_mask) # [B, T, A]
 
-        # delete one anchor pred assign to mutliple gts
-        unique_indices, valid_mask, topk_mask = self.filter_duplicates(iou_mat, topk_mask)
+        # Ensure each anchor maps to at most one GT
+        # assigned_gt_indices: [B, A], valid_mask: [B, A], final_topk_mask: [B, T, A]
+        assigned_gt_indices, valid_mask, final_topk_mask = self.filter_duplicates(iou_mat, topk_mask)
 
-        align_bbox = torch.gather(target_bbox, 1, unique_indices.repeat(1, 1, 4))
-        align_cls_indices = torch.gather(target_cls, 1, unique_indices)
-        align_cls = torch.zeros_like(align_cls_indices, dtype=torch.bool).repeat(1, 1, self.class_num)
-        align_cls.scatter_(-1, index=align_cls_indices, src=~align_cls)
+        # --- Obtener los targets alineados ---
+        # Usar assigned_gt_indices para seleccionar las bboxes GT correctas
+        # assigned_gt_indices [B, A] -> [B, A, 1] -> [B, A, 4]
+        bbox_indices = assigned_gt_indices.unsqueeze(-1).expand(B, A, 4)
+        align_bbox = torch.gather(target_bbox, 1, bbox_indices) # [B, A, 4]
+        
+        # Usar assigned_gt_indices para seleccionar las clases GT correctas
+        # assigned_gt_indices [B, A] -> [B, A, 1]
+        cls_indices = assigned_gt_indices.unsqueeze(-1) # [B, A, 1]
+        align_cls_indices = torch.gather(target_cls.unsqueeze(-1), 1, cls_indices) # [B, A, 1]
 
-        # normalize class ditribution
-        iou_mat *= topk_mask
-        target_matrix *= topk_mask
-        max_target = target_matrix.amax(dim=-1, keepdim=True)
-        max_iou = iou_mat.amax(dim=-1, keepdim=True)
-        normalize_term = (target_matrix / (max_target + 1e-9)) * max_iou
-        normalize_term = normalize_term.permute(0, 2, 1).gather(2, unique_indices)
-        align_cls = align_cls * normalize_term * valid_mask[:, :, None]
-        anchor_matched_targets = torch.cat([align_cls, align_bbox], dim=-1)
-        return anchor_matched_targets, valid_mask
+        # Crear one-hot encoding para las clases alineadas
+        align_cls_onehot = torch.zeros_like(predict_cls, device=device) # [B, A, C]
+        # Solo rellenar donde valid_mask es True para evitar scatter con índice -1 si no hay asignación
+        valid_cls_indices = align_cls_indices[valid_mask] # Obtener índices válidos
+        if valid_cls_indices.numel() > 0:
+             align_cls_onehot[valid_mask] = align_cls_onehot[valid_mask].scatter(-1, index=valid_cls_indices.long(), value=1.0) # Convertir a long
+
+        # --- Calcular puntuación de normalización ---
+        # Usar la máscara final (final_topk_mask) que indica las asignaciones válidas
+        masked_target_matrix = target_matrix * final_topk_mask # [B, T, A]
+        masked_iou_mat = iou_mat * final_topk_mask # [B, T, A]
+
+        # Normalizar puntuación por GT (máxima puntuación que obtuvo ese GT)
+        max_score_per_gt = masked_target_matrix.amax(dim=-1, keepdim=True) # [B, T, 1]
+        max_score_per_gt = torch.clamp(max_score_per_gt, min=1e-9) # Evitar división por cero
+
+        # Normalizar IoU por GT (máximo IoU que obtuvo ese GT)
+        max_iou_per_gt = masked_iou_mat.amax(dim=-1, keepdim=True) # [B, T, 1]
+        max_iou_per_gt = torch.clamp(max_iou_per_gt, min=1e-9)
+
+        # Calcular término de normalización [B, T, A]
+        normalize_term = (masked_target_matrix / max_score_per_gt) * max_iou_per_gt
+
+        # Seleccionar el término de normalización para los anchors asignados [B, A]
+        # Usamos assigned_gt_indices [B, A] para seleccionar de normalize_term [B, T, A]
+        # normalize_term.transpose(1, 2) -> [B, A, T]
+        # assigned_gt_indices.unsqueeze(-1) -> [B, A, 1]
+        selected_norm_term = torch.gather(normalize_term.transpose(1, 2), 2, assigned_gt_indices.unsqueeze(-1)).squeeze(-1) # [B, A]
+
+        # Aplicar normalización a las clases one-hot y aplicar valid_mask
+        align_cls_normalized = align_cls_onehot * selected_norm_term.unsqueeze(-1) * valid_mask.unsqueeze(-1)
+
+        # Combinar clases y bboxes
+        anchor_matched_targets = torch.cat([align_cls_normalized, align_bbox], dim=-1) # [B, A, C+4]
+        
+        # Preparar gt_indices de salida (-1 para no asignados)
+        gt_indices_output = torch.where(valid_mask, assigned_gt_indices, torch.tensor(-1, dtype=torch.long, device=device))
+
+        # --- Devolver 3 elementos ---
+        return anchor_matched_targets, valid_mask, gt_indices_output
 
 
 class Vec2Box:
@@ -371,21 +468,40 @@ class Vec2Box:
         self.image_size = image_size
         self.anchor_grid, self.scaler = anchor_grid.to(self.device), scaler.to(self.device)
 
-    def __call__(self, predicts):
-        preds_cls, preds_anc, preds_box = [], [], []
+    def __call__(self, predicts: List[Tuple[Tensor, Tensor, Tensor]]): # Añadida anotación de tipo
+        preds_cls, preds_box_dist, preds_box_vec = [], [], [] 
+        
         for layer_output in predicts:
-            pred_cls, pred_anc, pred_box = layer_output
+            # Ahora layer_output = (class_x, anchor_x_raw, vector_x), todos 4D
+            pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output 
+            
+            # pred_cls: [B, C, H, W] -> [B, H*W, C]
             preds_cls.append(rearrange(pred_cls, "B C h w -> B (h w) C"))
-            preds_anc.append(rearrange(pred_anc, "B A R h w -> B (h w) R A"))
-            preds_box.append(rearrange(pred_box, "B X h w -> B (h w) X"))
+            
+            # pred_box_dist_raw (original 4D): [B, 4*reg_max, H, W] -> [B, H*W, 4*reg_max]
+            # Esta es la línea que causaba el EinopsError. Ahora SÍ es 4D.
+            preds_box_dist.append(rearrange(pred_box_dist_raw, "B X h w -> B (h w) X")) 
+            
+            # pred_box_vec_raw (4D): [B, 4, H, W] -> [B, H*W, 4]
+            preds_box_vec.append(rearrange(pred_box_vec_raw, "B X h w -> B (h w) X"))
+            
         preds_cls = torch.concat(preds_cls, dim=1)
-        preds_anc = torch.concat(preds_anc, dim=1)
-        preds_box = torch.concat(preds_box, dim=1)
+        preds_box_dist = torch.concat(preds_box_dist, dim=1) # [B, A_total, 4*reg_max] (Para DFLoss)
+        preds_box_vec = torch.concat(preds_box_vec, dim=1) # [B, A_total, 4] (Decodificado por DFL)
 
-        pred_LTRB = preds_box * self.scaler.view(1, -1, 1)
+        # Usar preds_box_vec (que es la salida directa de Anchor2Vec)
+        pred_LTRB = preds_box_vec * self.scaler.view(1, -1, 1) # [B, A_total, 4]
+        
         lt, rb = pred_LTRB.chunk(2, dim=-1)
-        preds_box = torch.cat([self.anchor_grid - lt, self.anchor_grid + rb], dim=-1)
-        return preds_cls, preds_anc, preds_box
+        # self.anchor_grid debe expandirse al batch size ---
+        # self.anchor_grid es [A_total, 2]
+        # Necesitamos [B, A_total, 2]
+        anchor_grid_batch = self.anchor_grid.unsqueeze(0).expand(preds_cls.shape[0], -1, -1)
+        preds_box = torch.cat([anchor_grid_batch - lt, anchor_grid_batch + rb], dim=-1) # xyxy
+        #
+        
+        # Devolvemos cls, dist (para DFLoss) y box_xyxy (para IoULoss y Matcher)
+        return preds_cls, preds_box_dist, preds_box
 
 
 class Anc2Box:
@@ -483,9 +599,10 @@ def calculate_map(predictions, ground_truths) -> Dict[str, Tensor]:
     return mAP
 
 
-def to_metrics_format(prediction: Tensor) -> Dict[str, Union[float, Tensor]]:
+def to_metrics_format(prediction: Tensor):
     prediction = prediction[prediction[:, 0] != -1]
     bbox = {"boxes": prediction[:, 1:5], "labels": prediction[:, 0].int()}
     if prediction.size(1) == 6:
         bbox["scores"] = prediction[:, 5]
-    return bbox
+    return bbox 
+

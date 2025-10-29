@@ -279,7 +279,7 @@ def setup(cfg: Config):
         logger.setLevel(logging.ERROR)
         return progress, loggers, save_path
 
-    progress.append(YOLORichProgressBar())
+    # progress.append(YOLORichProgressBar())
     progress.append(YOLORichModelSummary())
     progress.append(ImageLogger())
     if cfg.use_tensorboard:

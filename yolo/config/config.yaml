@@ -2,11 +2,11 @@ hydra:
   run:
     dir: runs/${task.task}/${name}
 
-name: v9-dev
+name: v9-seg-test
 
 defaults:
   - _self_
-  - task: inference
-  - dataset: coco
-  - model: v9-c
+  - task: train
+  - dataset: dental_dataset
+  - model: v9-c-seg
   - general

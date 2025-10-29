@@ -182,7 +182,7 @@ def create_model(model_cfg: ModelConfig, weight_path: Union[bool, Path] = True, 
             weight_path = Path(weight_path)
 
         if not weight_path.exists():
-            logger.info(f"🌐 Weight {weight_path} not found, try downloading")
+            logger.info(f"Weight {weight_path} not found, try downloading")
             prepare_weight(weight_path=weight_path)
         if weight_path.exists():
             model.save_load_weights(weight_path)

@@ -148,3 +148,7 @@ node_modules/
 
 # Not ignore image for demo
 !demo/images/*/*.png
+
+# test image
+test_data/
+FDI_ordered_labels/

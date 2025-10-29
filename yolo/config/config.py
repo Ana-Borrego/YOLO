@@ -84,7 +84,7 @@ class MatcherConfig:
 
 @dataclass
 class LossConfig:
-    objective: Dict[str, int]
+    objective: Dict[str, float]
     aux: Union[bool, float]
     matcher: MatcherConfig
 

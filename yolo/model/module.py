@@ -83,11 +83,14 @@ class Detection(nn.Module):
         self.anchor_conv[-1].bias.data.fill_(1.0)
         self.class_conv[-1].bias.data.fill_(-10)  # TODO: math.log(5 * 4 ** idx / 80 ** 3)
 
-    def forward(self, x: Tensor) -> Tuple[Tensor]:
-        anchor_x = self.anchor_conv(x)
-        class_x = self.class_conv(x)
-        anchor_x, vector_x = self.anc2vec(anchor_x)
-        return class_x, anchor_x, vector_x
+    def forward(self, x: Tensor):
+        class_x = self.class_conv(x)          # [B, C, H, W] -> B: dimensión del lote, C: Dimensión de los Canales, h,w altura y ancho del mapa. 
+        anchor_x_raw = self.anchor_conv(x)    # [B, 4*reg_max, H, W] (El original 4D)
+        # Pasar una copia a anc2vec para no modificar el original
+        # anc2vec devuelve (anchor_x_rearranged_5D, vector_x_4D)
+        _, vector_x = self.anc2vec(anchor_x_raw.clone()) # Solo necesitamos vector_x
+        # Devolver cls (4D), anchor_x original (4D), vector_x (4D)
+        return class_x, anchor_x_raw, vector_x
 
 
 class IDetection(nn.Module):
@@ -159,8 +162,32 @@ class MultiheadSegmentation(nn.Module):
         )
         self.heads.append(Conv(proto_channels, num_maskes, 1))
 
-    def forward(self, x_list: List[torch.Tensor]) -> List[torch.Tensor]:
-        return [head(x) for x, head in zip(x_list, self.heads)]
+    def forward(self, x_list: List[torch.Tensor]) -> Tuple[List[Tuple[Tensor, Tensor, Tensor]], List[torch.Tensor]]:
+        """
+        Calcula y devuelve tanto las salidas de detección como las de segmentación.
+
+        Args:
+            x_list (List[torch.Tensor]): Lista de mapas de características de entrada.
+                Se espera que x_list[:-1] sean las entradas para detección/coeficientes (P3, P4, P5)
+                y x_list[-1] sea la entrada para prototipos.
+
+        Returns:
+            Tuple[List[Tuple[Tensor, Tensor, Tensor]], List[torch.Tensor]]: 
+                Una tupla conteniendo:
+                - detection_outputs: Lista de tuplas [(cls1, dist1, box1), (cls2, dist2, box2), ...]
+                - segmentation_outputs: Lista [coeffs1, coeffs2, coeffs3, proto]
+        """
+        # 1. Obtener salidas de detección (cls, dist, box) de las escalas P3, P4, P5
+        #    Asumiendo que self.detect espera la lista sin la entrada de prototipos.
+        detection_outputs: List[Tuple[Tensor, Tensor, Tensor]] = self.detect(x_list[:-1]) 
+
+        # 2. Obtener salidas de segmentación (coeficientes y prototipos)
+        #    zip(x_list, self.heads) empareja correctamente las entradas con las cabezas
+        segmentation_outputs: List[torch.Tensor] = [head(x) for x, head in zip(x_list, self.heads)]
+        #    segmentation_outputs será [coeffs1, coeffs2, coeffs3, proto]
+
+        # 3. Devolver AMBOS resultados como una tupla
+        return detection_outputs, segmentation_outputs
 
 
 class Anchor2Vec(nn.Module):
