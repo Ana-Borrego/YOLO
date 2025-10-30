@@ -190,10 +190,7 @@ class PostProcess:
             self.converter.update(image_size)
         
         # predict["Main"] puede ser una tupla o una lista de tuplas
-        main_output = predict["Main"]
-        if isinstance(main_output, tuple):
-            # Si es una tupla, convertirla en lista de tuplas
-            main_output = [main_output]
+        main_output = predict["Main"][0]
             
         # Ahora main_output es una lista de tuplas y el converter puede procesarla
         prediction = self.converter(main_output)

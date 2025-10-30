@@ -394,8 +394,12 @@ class BoxMatcher:
             # --- Devolver 3 elementos ---
             return anchor_matched_targets, valid_mask, gt_indices
 
-        target_cls, target_bbox = target.split([1, 4], dim=-1)  # cls: [B, T, 1], bbox: [B, T, 4] (xyxy)
+        target_cls, target_bbox_normalized = target.split([1, 4], dim=-1)  # cls: [B, T, 1], bbox: [B, T, 4] (xyxy, 0-1)
         target_cls = target_cls.long().squeeze(-1) # -> [B, T]
+        
+        image_size_tensor = torch.tensor(self.vec2box.image_size, device=target.device, dtype=target.dtype) # [W, H]
+        target_bbox = target_bbox_normalized * image_size_tensor.repeat(1, 2) # [B, T, 4] (xyxy, 0-640)
+        
 
         # get valid matrix (each gt appear in which anchor grid)
         grid_mask = self.get_valid_matrix(target_bbox) # [B, T, A]
@@ -466,13 +470,16 @@ class BoxMatcher:
         # Aplicar normalización a las clases one-hot y aplicar valid_mask
         align_cls_normalized = align_cls_onehot * selected_norm_term.unsqueeze(-1) * valid_mask.unsqueeze(-1)
 
+        # --- IMPORTANTE: De-normalizar el BBox de vuelta a (0-1) para YOLOSegmentationLoss ---
+        # YOLOSegmentationLoss espera que align_bbox esté normalizado para el crop_mask
+        align_bbox_normalized = align_bbox / image_size_tensor.repeat(1, 2).unsqueeze(1)
+        
         # Combinar clases y bboxes
-        anchor_matched_targets = torch.cat([align_cls_normalized, align_bbox], dim=-1) # [B, A, C+4]
+        anchor_matched_targets = torch.cat([align_cls_normalized, align_bbox_normalized], dim=-1) # [B, A, C+4]
         
         # Preparar gt_indices de salida (-1 para no asignados)
         gt_indices_output = torch.where(valid_mask, assigned_gt_indices, torch.tensor(-1, dtype=torch.long, device=device))
 
-        # --- Devolver 3 elementos ---
         return anchor_matched_targets, valid_mask, gt_indices_output
 
 
@@ -525,17 +532,18 @@ class Vec2Box:
                 raise ValueError(f"Expected tuple of tensors, got {type(layer_output)}")
             
             # Manejar diferentes formatos de salida
-            if len(layer_output) == 2:
-                # Formato: (class_x, box_x)
-                pred_cls, pred_box_raw = layer_output
-                # Usar el mismo tensor para dist y vec en este caso
-                pred_box_dist_raw = pred_box_raw
-                pred_box_vec_raw = pred_box_raw
-            elif len(layer_output) == 3:
+            # if len(layer_output) == 2:
+            #     # Formato: (class_x, box_x)
+            #     pred_cls, pred_box_raw = layer_output
+            #     # Usar el mismo tensor para dist y vec en este caso
+            #     pred_box_dist_raw = pred_box_raw
+            #     pred_box_vec_raw = pred_box_raw
+            # el
+            if len(layer_output) == 3:
                 # Formato: (class_x, anchor_x_raw, vector_x)
                 pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output
             else:
-                raise ValueError(f"Expected tuple of 2 or 3 tensors, got length {len(layer_output)}")
+                raise ValueError(f"Expected tuple of 3 tensors, got length {len(layer_output)}")
             
             # Verificar que los tensores son 4D
             if not all(len(t.shape) == 4 for t in (pred_cls, pred_box_dist_raw, pred_box_vec_raw)):
