@@ -143,37 +143,37 @@ class TrainModel(ValidateModel):
         predicts = self(images) # Salida del modelo (diccionario)
         
         # DEBUG: Inspeccionar salida del modelo ---
-        if batch_idx == 0: 
-            print("\n--- DEBUG: Salida del Modelo (predicts) ---")
+        # if batch_idx == 0: 
+        #     print("\n--- DEBUG: Salida del Modelo (predicts) ---")
             
-            # Función de ayuda recursiva para imprimir formas
-            def print_nested_shapes(item, indent=""):
-                """Función recursiva para imprimir formas de tensores anidados."""
-                if isinstance(item, torch.Tensor):
-                    print(f"{indent}Tensor{item.shape}")
-                elif isinstance(item, (list, tuple)):
-                    if not item:
-                        print(f"{indent}Empty List/Tuple []")
-                        return 
-                    print(f"{indent}{type(item).__name__} con {len(item)} elementos:")
-                    for i, sub_item in enumerate(item):
-                        print(f"{indent}  Item {i}:")
-                        print_nested_shapes(sub_item, indent + "    ")
-                elif isinstance(item, dict):
-                    if not item:
-                        print(f"{indent}Empty Dict {{}}")
-                        return 
-                    print(f"{indent}Dict con {len(item.keys())} claves:")
-                    for key, value in item.items():
-                        print(f"{indent}  Clave '{key}':")
-                        print_nested_shapes(value, indent + "    ")
-                else:
-                    print(f"{indent}Tipo: {type(item)}")
+        #     # Función de ayuda recursiva para imprimir formas
+        #     def print_nested_shapes(item, indent=""):
+        #         """Función recursiva para imprimir formas de tensores anidados."""
+        #         if isinstance(item, torch.Tensor):
+        #             print(f"{indent}Tensor{item.shape}")
+        #         elif isinstance(item, (list, tuple)):
+        #             if not item:
+        #                 print(f"{indent}Empty List/Tuple []")
+        #                 return 
+        #             print(f"{indent}{type(item).__name__} con {len(item)} elementos:")
+        #             for i, sub_item in enumerate(item):
+        #                 print(f"{indent}  Item {i}:")
+        #                 print_nested_shapes(sub_item, indent + "    ")
+        #         elif isinstance(item, dict):
+        #             if not item:
+        #                 print(f"{indent}Empty Dict {{}}")
+        #                 return 
+        #             print(f"{indent}Dict con {len(item.keys())} claves:")
+        #             for key, value in item.items():
+        #                 print(f"{indent}  Clave '{key}':")
+        #                 print_nested_shapes(value, indent + "    ")
+        #         else:
+        #             print(f"{indent}Tipo: {type(item)}")
 
-            # Imprimir la estructura de 'predicts'
-            print_nested_shapes(predicts, indent="  ")
+        #     # Imprimir la estructura de 'predicts'
+        #     print_nested_shapes(predicts, indent="  ")
             
-            print("--- FIN DEBUG ---")
+        #     print("--- FIN DEBUG ---")
         # ---------------------------------------------------------
         
         # Extracción de salidas y llamada a loss_fn ---

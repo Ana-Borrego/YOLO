@@ -174,21 +174,26 @@ class BoxMatcher:
         # logger.debug(f"targets_dist stats: min={targets_dist.min().item():.2f}, max={targets_dist.max().item():.2f}")
         # logger.debug(f"scaler stats: {self.vec2box.scaler.min().item():.2f}, {self.vec2box.scaler.max().item():.2f}")
         
-        # CONDICIÓN ORIGINAL -- ES RESTRICTIVA
         min_reg_dist, max_reg_dist = targets_dist.amin(dim=-1), targets_dist.amax(dim=-1)
         
         # Más debug
         # logger.debug(f"min_reg_dist stats: min={min_reg_dist.min().item():.2f}, max={min_reg_dist.max().item():.2f}")
         # logger.debug(f"max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
+        # Debugg 2
+        
+        if torch.rand(1) < 0.1: # Loggear 10% de las veces para no inundar
+            logger.debug(f"BoxMatcher DEBUG: reg_max={self.reg_max}")
+            logger.debug(f"BoxMatcher DEBUG: max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
         
         # Relajar ligeramente las condiciones y agregar más logging
         # Eliminamos 'target_on_anchor' que es demasiado restrictiva.
+        # CONDICIÓN ORIGINAL -- ES RESTRICTIVA
         # target_on_anchor = min_reg_dist >= -0.1  # Permitir un pequeño margen negativo
         target_in_reg_max = max_reg_dist <= self.reg_max
         
         # Debug final
         # logger.debug(f"Valid matches: target_on_anchor={target_on_anchor.sum().item()}, target_in_reg_max={target_in_reg_max.sum().item()}")
-        
+        logger.debug(f"target_in_reg_max es igual a: {target_in_reg_max}")
         return target_in_reg_max
 
     def get_cls_matrix(self, predict_cls: Tensor, target_cls: Tensor) -> Tensor:
