@@ -34,10 +34,12 @@ class ValidateModel(BaseModel):
             self.validation_cfg = self.cfg.task
         else:
             self.validation_cfg = self.cfg.task.validation # type: ignore
-        self.metric = MeanAveragePrecision(iou_type="bbox", box_format="xyxy", backend="faster_coco_eval")
-        self.metric.warn_on_many_detections = False
+        # self.metric = MeanAveragePrecision(iou_type="bbox", box_format="xyxy", backend="faster_coco_eval")
+        # self.metric.warn_on_many_detections = False
+        
         self.val_loader = create_dataloader(self.validation_cfg.data, self.cfg.dataset, self.validation_cfg.task)
-        self.ema = self.model
+        
+        # self.ema = self.model
 
     def setup(self, stage):
         self.vec2box = create_converter(
@@ -45,6 +47,19 @@ class ValidateModel(BaseModel):
         )
         self.post_process = PostProcess(self.vec2box, self.validation_cfg.nms)
 
+        # Inicializar EMA aquí
+        self.ema = self.model
+        
+        # Determinar iou_type (preparando el Paso 5 -- Validación)
+        if 'seg' in self.cfg.model.name.lower():
+             self.iou_type = "segm"
+        else:
+             self.iou_type = "bbox"
+
+        # Inicializar la métrica aquí
+        self.metric = MeanAveragePrecision(iou_type=self.iou_type, box_format="xyxy", backend="faster_coco_eval")
+        self.metric.warn_on_many_detections = False
+        
     def val_dataloader(self):
         return self.val_loader
 
