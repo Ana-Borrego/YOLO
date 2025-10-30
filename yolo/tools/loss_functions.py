@@ -208,25 +208,25 @@ class YOLOSegmentationLoss:
             padded_targets = torch.empty((batch_size, 0, 5), device=device)
         
         # --- INICIO DEBUG: Verificar padded_targets ---
-        logger.debug("--- DEBUG: Verificando padded_targets antes del Matcher ---")
-        logger.debug(f"batch_size={batch_size}, padded_targets.shape={padded_targets.shape}")
-        if padded_targets.numel() > 0:
-            target_cls_values = padded_targets[..., 0]  # Extraer solo la columna de clase
-            # Filtrar el padding (-1) antes de buscar min/max
-            valid_cls_mask = target_cls_values != -1.0
-            if valid_cls_mask.any():
-                valid_classes = target_cls_values[valid_cls_mask]
-                logger.debug(f"classes min/max: {valid_classes.min().item()}/{valid_classes.max().item()}")
-                # Comprobar si hay clases fuera del rango esperado [0, class_num-1]
-                if valid_classes.min() < 0 or valid_classes.max() >= self.class_num:
-                    logger.warning(
-                        f"¡¡¡ERROR!!! Clases fuera del rango [0, {self.class_num-1}] detectadas."
-                    )
-            else:
-                logger.debug("No valid class entries in padded_targets (only padding).")
-        else:
-            logger.debug("padded_targets está vacío.")
-        logger.debug("--- FIN DEBUG ---")
+        # logger.debug("--- DEBUG: Verificando padded_targets antes del Matcher ---")
+        # logger.debug(f"batch_size={batch_size}, padded_targets.shape={padded_targets.shape}")
+        # if padded_targets.numel() > 0:
+        #     target_cls_values = padded_targets[..., 0]  # Extraer solo la columna de clase
+        #     # Filtrar el padding (-1) antes de buscar min/max
+        #     valid_cls_mask = target_cls_values != -1.0
+        #     if valid_cls_mask.any():
+        #         valid_classes = target_cls_values[valid_cls_mask]
+        #         logger.debug(f"classes min/max: {valid_classes.min().item()}/{valid_classes.max().item()}")
+        #         # Comprobar si hay clases fuera del rango esperado [0, class_num-1]
+        #         if valid_classes.min() < 0 or valid_classes.max() >= self.class_num:
+        #             logger.warning(
+        #                 f"¡¡¡ERROR!!! Clases fuera del rango [0, {self.class_num-1}] detectadas."
+        #             )
+        #     else:
+        #         logger.debug("No valid class entries in padded_targets (only padding).")
+        # else:
+        #     logger.debug("padded_targets está vacío.")
+        # logger.debug("--- FIN DEBUG ---")
         
         # FALLO AL LLAMAR AL MATCHER SI HAY CLASES INVÁLIDAS.
         align_targets, valid_masks, gt_indices = self.matcher(

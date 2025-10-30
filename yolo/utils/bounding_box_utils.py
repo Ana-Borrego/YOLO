@@ -171,23 +171,25 @@ class BoxMatcher:
         targets_dist /= self.vec2box.scaler[None, None, :, None]  # (1, 1, anchors, 1)
         
         # Agregar debugging
-        logger.debug(f"targets_dist stats: min={targets_dist.min().item():.2f}, max={targets_dist.max().item():.2f}")
-        logger.debug(f"scaler stats: {self.vec2box.scaler.min().item():.2f}, {self.vec2box.scaler.max().item():.2f}")
+        # logger.debug(f"targets_dist stats: min={targets_dist.min().item():.2f}, max={targets_dist.max().item():.2f}")
+        # logger.debug(f"scaler stats: {self.vec2box.scaler.min().item():.2f}, {self.vec2box.scaler.max().item():.2f}")
         
+        # CONDICIÓN ORIGINAL -- ES RESTRICTIVA
         min_reg_dist, max_reg_dist = targets_dist.amin(dim=-1), targets_dist.amax(dim=-1)
         
         # Más debug
-        logger.debug(f"min_reg_dist stats: min={min_reg_dist.min().item():.2f}, max={min_reg_dist.max().item():.2f}")
-        logger.debug(f"max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
+        # logger.debug(f"min_reg_dist stats: min={min_reg_dist.min().item():.2f}, max={min_reg_dist.max().item():.2f}")
+        # logger.debug(f"max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
         
         # Relajar ligeramente las condiciones y agregar más logging
-        target_on_anchor = min_reg_dist >= -0.1  # Permitir un pequeño margen negativo
+        # Eliminamos 'target_on_anchor' que es demasiado restrictiva.
+        # target_on_anchor = min_reg_dist >= -0.1  # Permitir un pequeño margen negativo
         target_in_reg_max = max_reg_dist <= self.reg_max
         
         # Debug final
-        logger.debug(f"Valid matches: target_on_anchor={target_on_anchor.sum().item()}, target_in_reg_max={target_in_reg_max.sum().item()}")
+        # logger.debug(f"Valid matches: target_on_anchor={target_on_anchor.sum().item()}, target_in_reg_max={target_in_reg_max.sum().item()}")
         
-        return target_on_anchor & target_in_reg_max
+        return target_in_reg_max
 
     def get_cls_matrix(self, predict_cls: Tensor, target_cls: Tensor) -> Tensor:
         """
