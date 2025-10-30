@@ -490,7 +490,7 @@ class Vec2Box:
         self.image_size = image_size
         self.anchor_grid, self.scaler = anchor_grid.to(self.device), scaler.to(self.device)
 
-    def __call__(self, predicts: List[Tuple[Tensor, Tensor, Tensor]]):
+    def __call__(self, predicts: List[Tuple[Tensor, ...]]):
         preds_cls, preds_box_dist, preds_box_vec = [], [], []
         
         # Asegurar que predicts es una lista
@@ -498,11 +498,26 @@ class Vec2Box:
             predicts = [predicts]
             
         for layer_output in predicts:
-            # Verificar que cada layer_output es una tupla de 3 tensores
-            if not isinstance(layer_output, tuple) or len(layer_output) != 3:
-                raise ValueError(f"Expected tuple of 3 tensors, got {type(layer_output)} of length {len(layer_output) if isinstance(layer_output, tuple) else 'N/A'}")
+            # Verificar que layer_output es una tupla
+            if not isinstance(layer_output, tuple):
+                raise ValueError(f"Expected tuple of tensors, got {type(layer_output)}")
             
-            pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output
+            # Manejar diferentes formatos de salida
+            if len(layer_output) == 2:
+                # Formato: (class_x, box_x)
+                pred_cls, pred_box_raw = layer_output
+                # Usar el mismo tensor para dist y vec en este caso
+                pred_box_dist_raw = pred_box_raw
+                pred_box_vec_raw = pred_box_raw
+            elif len(layer_output) == 3:
+                # Formato: (class_x, anchor_x_raw, vector_x)
+                pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output
+            else:
+                raise ValueError(f"Expected tuple of 2 or 3 tensors, got length {len(layer_output)}")
+            
+            # Verificar que los tensores son 4D
+            if not all(len(t.shape) == 4 for t in (pred_cls, pred_box_dist_raw, pred_box_vec_raw)):
+                raise ValueError(f"Expected 4D tensors, got shapes: cls={pred_cls.shape}, dist={pred_box_dist_raw.shape}, vec={pred_box_vec_raw.shape}")
             
             # Verificar que los tensores son 4D: [B, C, H, W]
             if len(pred_cls.shape) != 4 or len(pred_box_dist_raw.shape) != 4 or len(pred_box_vec_raw.shape) != 4:
