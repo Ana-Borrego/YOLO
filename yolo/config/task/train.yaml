@@ -46,5 +46,5 @@ scheduler:
     end_factor: 0.01
 
 ema:
-  enable: true
+  enable: False
   decay: 0.9999
