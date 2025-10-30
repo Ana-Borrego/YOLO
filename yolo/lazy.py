@@ -16,6 +16,8 @@ from yolo.utils.logging_utils import setup
 def main(cfg: Config):
     callbacks, loggers, save_path = setup(cfg)
 
+    from lightning.pytorch.strategies import DDPStrategy
+    
     trainer = Trainer(
         accelerator="auto",
         max_epochs=getattr(cfg.task, "epoch", None),
@@ -28,7 +30,8 @@ def main(cfg: Config):
         deterministic=True,
         enable_progress_bar=not getattr(cfg, "quite", False),
         default_root_dir=save_path,
-        num_sanity_val_steps=0
+        num_sanity_val_steps=0,
+        strategy=DDPStrategy(find_unused_parameters=True)
     )
 
     if cfg.task.task == "train":

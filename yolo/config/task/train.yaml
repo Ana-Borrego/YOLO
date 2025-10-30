@@ -5,6 +5,12 @@ defaults:
 
 epoch: 1
 
+trainer:
+  _target_: lightning.pytorch.Trainer
+  strategy:
+    _target_: lightning.pytorch.strategies.DDPStrategy
+    find_unused_parameters: true
+
 data:
   batch_size: 4
   image_size: ${image_size}
