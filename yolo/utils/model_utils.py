@@ -45,8 +45,7 @@ class EMA(Callback):
         self.tau = tau
         self.step = 0
         self.ema_state_dict = None
-
-    @override
+    
     def setup(self, trainer, pl_module, stage):
         pl_module.ema = deepcopy(pl_module.model)
         self.tau /= trainer.world_size # type: ignore
