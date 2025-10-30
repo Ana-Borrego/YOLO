@@ -52,9 +52,9 @@ class ValidateModel(BaseModel):
         
         # Determinar iou_type (preparando el Paso 5 -- Validación)
         if 'seg' in self.cfg.model.name.lower():
-             self.iou_type = "segm"
+            self.iou_type = "segm"
         else:
-             self.iou_type = "bbox"
+            self.iou_type = "bbox"
 
         # Inicializar la métrica aquí
         self.metric = MeanAveragePrecision(iou_type=self.iou_type, box_format="xyxy", backend="faster_coco_eval")
@@ -64,7 +64,8 @@ class ValidateModel(BaseModel):
         return self.val_loader
 
     def validation_step(self, batch, batch_idx):
-        batch_size, images, targets, rev_tensor, img_paths = batch
+        # collate_fn returns (images, targets, rev_tensor, img_paths)
+        images, targets, rev_tensor, img_paths = batch
         H, W = images.shape[2:]
         predicts = self.post_process(self.ema(images), image_size=[W, H])
         mAP = self.metric(
@@ -197,6 +198,17 @@ class TrainModel(ValidateModel):
             batch_size=batch_size,
             rank_zero_only=True,
         )
+        # Si todas las componentes de la pérdida son cero, registrar información de depuración
+        try:
+            if all(float(v) == 0.0 for v in loss_item.values()):
+                num_bboxes = targets.get("bboxes").shape[0] if isinstance(targets, dict) and "bboxes" in targets else -1
+                num_segments = len(targets.get("segments", [])) if isinstance(targets, dict) else -1
+                logger.warning(
+                    f"All loss items are zero at batch {batch_idx}. bboxes={num_bboxes}, segments={num_segments}"
+                )
+        except Exception:
+            # No fallar por problemas de logging
+            pass
         self.log_dict(lr_dict, prog_bar=False, logger=True, on_epoch=False, rank_zero_only=True)
         return loss # No multiplicar por batch_size si la pérdida ya está normalizada por lote
 
