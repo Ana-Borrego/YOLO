@@ -67,11 +67,39 @@ class ValidateModel(BaseModel):
         # collate_fn returns (images, targets, rev_tensor, img_paths)
         images, targets, rev_tensor, img_paths = batch
         H, W = images.shape[2:]
-        predicts = self.post_process(self.ema(images), image_size=[W, H])
-        mAP = self.metric(
-            [to_metrics_format(predict) for predict in predicts], [to_metrics_format(target) for target in targets]
-        )
-        return predicts, mAP
+        
+        # Añadir logging detallado
+        logger.debug(f"Validation batch {batch_idx}: images.shape={images.shape}, targets len={len(targets)}")
+        
+        # Obtener y analizar la salida del modelo
+        model_output = self.ema(images)
+        logger.debug(f"Model output type: {type(model_output)}")
+        if isinstance(model_output, (tuple, list)):
+            logger.debug(f"Model output elements: {[type(x) for x in model_output]}")
+            logger.debug(f"Model output shapes: {[x.shape if isinstance(x, torch.Tensor) else 'not tensor' for x in model_output]}")
+        elif isinstance(model_output, dict):
+            logger.debug(f"Model output keys: {model_output.keys()}")
+            logger.debug(f"Model output shapes: {[(k, v.shape) if isinstance(v, torch.Tensor) else (k, type(v)) for k, v in model_output.items()]}")
+        
+        # Post-proceso y métricas
+        try:
+            predicts = self.post_process(model_output, image_size=[W, H])
+            logger.debug(f"Post-process output type: {type(predicts)}")
+            logger.debug(f"Number of predictions: {len(predicts)}")
+            if len(predicts) > 0:
+                logger.debug(f"First prediction keys: {predicts[0].keys() if isinstance(predicts[0], dict) else 'not dict'}")
+            
+            metrics_pred = [to_metrics_format(predict) for predict in predicts]
+            metrics_target = [to_metrics_format(target) for target in targets]
+            logger.debug(f"Metrics format - predictions: {len(metrics_pred)}, targets: {len(metrics_target)}")
+            
+            mAP = self.metric(metrics_pred, metrics_target)
+            return predicts, mAP
+            
+        except Exception as e:
+            logger.error(f"Error in validation step: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            raise
 
     def on_validation_epoch_end(self):
         epoch_metrics = self.metric.compute()
@@ -159,16 +187,16 @@ class TrainModel(ValidateModel):
 
             # 3. Extraer AMBOS Prototipos
             if isinstance(main_seg_list, list) and len(main_seg_list) > 0 and isinstance(main_seg_list[-1], torch.Tensor):
-                 proto_main = main_seg_list[-1]
-                 main_coeffs_raw = main_seg_list[:-1]
+                proto_main = main_seg_list[-1]
+                main_coeffs_raw = main_seg_list[:-1]
             else:
-                 raise ValueError(f"No se pudieron encontrar los prototipos 'Main'.")
+                raise ValueError(f"No se pudieron encontrar los prototipos 'Main'.")
             
             if isinstance(aux_seg_list, list) and len(aux_seg_list) > 0 and isinstance(aux_seg_list[-1], torch.Tensor):
-                 proto_aux = aux_seg_list[-1]
-                 aux_coeffs_raw = aux_seg_list[:-1]
+                proto_aux = aux_seg_list[-1]
+                aux_coeffs_raw = aux_seg_list[:-1]
             else:
-                 raise ValueError(f"No se pudieron encontrar los prototipos 'AUX'.")
+                raise ValueError(f"No se pudieron encontrar los prototipos 'AUX'.")
 
             # 5. Llamar a la función de pérdida con ambos prototipos
             loss, loss_item = self.loss_fn(
