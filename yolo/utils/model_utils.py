@@ -45,7 +45,7 @@ class EMA(Callback):
         self.tau = tau
         self.step = 0
         self.ema_state_dict = None
-    
+
     def setup(self, trainer, pl_module, stage):
         pl_module.ema = deepcopy(pl_module.model)
         self.tau /= trainer.world_size # type: ignore
@@ -59,7 +59,7 @@ class EMA(Callback):
     def on_validation_start(self, trainer: "Trainer", pl_module: "LightningModule"):
         # Ya no necesitamos comprobar si es None, solo cargar el estado actual
         if self.ema_state_dict: # Asegurarse de que no sea None (aunque setup ya lo hizo)
-             pl_module.ema.load_state_dict(self.ema_state_dict)
+            pl_module.ema.load_state_dict(self.ema_state_dict)
 
     @no_grad()
     def on_train_batch_end(self, trainer: "Trainer", pl_module: "LightningModule", *args, **kwargs) -> None:
@@ -69,15 +69,15 @@ class EMA(Callback):
         # Asegurarse de que param esté en el mismo dispositivo que ema_state_dict
         # (Aunque deberían estarlo si pl_module.device es correcto)
         for key, param in pl_module.model.state_dict().items():
-             if key in self.ema_state_dict:
-                  param_detached = param.detach()
-                  # Asegurar que ambos estén en el mismo dispositivo antes de lerp
-                  if param_detached.device != self.ema_state_dict[key].device:
-                       param_detached = param_detached.to(self.ema_state_dict[key].device)
-                       
-                  self.ema_state_dict[key] = lerp(param_detached, self.ema_state_dict[key], decay_factor) # type: ignore
-             else:
-                  logger.warning(f"Clave {key} no encontrada en EMA state_dict. Omitiendo.")
+            if key in self.ema_state_dict:
+                param_detached = param.detach()
+                # Asegurar que ambos estén en el mismo dispositivo antes de lerp
+                if param_detached.device != self.ema_state_dict[key].device:
+                    param_detached = param_detached.to(self.ema_state_dict[key].device)
+                
+                self.ema_state_dict[key] = lerp(param_detached, self.ema_state_dict[key], decay_factor) # type: ignore
+            else:
+                logger.warning(f"Clave {key} no encontrada en EMA state_dict. Omitiendo.")
 
 
 def create_optimizer(model: YOLO, optim_cfg: OptimizerConfig) -> Optimizer:
@@ -188,11 +188,21 @@ class PostProcess:
     ) -> List[Tensor]:
         if image_size is not None:
             self.converter.update(image_size)
-        prediction = self.converter(predict["Main"])
+        
+        # predict["Main"] puede ser una tupla o una lista de tuplas
+        main_output = predict["Main"]
+        if isinstance(main_output, tuple):
+            # Si es una tupla, convertirla en lista de tuplas
+            main_output = [main_output]
+            
+        # Ahora main_output es una lista de tuplas y el converter puede procesarla
+        prediction = self.converter(main_output)
         pred_class, _, pred_bbox = prediction[:3]
         pred_conf = prediction[3] if len(prediction) == 4 else None
+        
         if rev_tensor is not None:
             pred_bbox = (pred_bbox - rev_tensor[:, None, 1:]) / rev_tensor[:, 0:1, None]
+        
         pred_bbox = bbox_nms(pred_class, pred_bbox, self.nms, pred_conf)
         return pred_bbox
 

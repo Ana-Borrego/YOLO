@@ -490,21 +490,31 @@ class Vec2Box:
         self.image_size = image_size
         self.anchor_grid, self.scaler = anchor_grid.to(self.device), scaler.to(self.device)
 
-    def __call__(self, predicts: List[Tuple[Tensor, Tensor, Tensor]]): # Añadida anotación de tipo
-        preds_cls, preds_box_dist, preds_box_vec = [], [], [] 
+    def __call__(self, predicts: List[Tuple[Tensor, Tensor, Tensor]]):
+        preds_cls, preds_box_dist, preds_box_vec = [], [], []
         
+        # Asegurar que predicts es una lista
+        if isinstance(predicts, tuple):
+            predicts = [predicts]
+            
         for layer_output in predicts:
-            # Ahora layer_output = (class_x, anchor_x_raw, vector_x), todos 4D
-            pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output 
+            # Verificar que cada layer_output es una tupla de 3 tensores
+            if not isinstance(layer_output, tuple) or len(layer_output) != 3:
+                raise ValueError(f"Expected tuple of 3 tensors, got {type(layer_output)} of length {len(layer_output) if isinstance(layer_output, tuple) else 'N/A'}")
+            
+            pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output
+            
+            # Verificar que los tensores son 4D: [B, C, H, W]
+            if len(pred_cls.shape) != 4 or len(pred_box_dist_raw.shape) != 4 or len(pred_box_vec_raw.shape) != 4:
+                raise ValueError(f"Expected 4D tensors, got shapes: cls={pred_cls.shape}, dist={pred_box_dist_raw.shape}, vec={pred_box_vec_raw.shape}")
             
             # pred_cls: [B, C, H, W] -> [B, H*W, C]
             preds_cls.append(rearrange(pred_cls, "B C h w -> B (h w) C"))
             
-            # pred_box_dist_raw (original 4D): [B, 4*reg_max, H, W] -> [B, H*W, 4*reg_max]
-            # Esta es la línea que causaba el EinopsError. Ahora SÍ es 4D.
-            preds_box_dist.append(rearrange(pred_box_dist_raw, "B X h w -> B (h w) X")) 
+            # pred_box_dist_raw: [B, 4*reg_max, H, W] -> [B, H*W, 4*reg_max]
+            preds_box_dist.append(rearrange(pred_box_dist_raw, "B X h w -> B (h w) X"))
             
-            # pred_box_vec_raw (4D): [B, 4, H, W] -> [B, H*W, 4]
+            # pred_box_vec_raw: [B, 4, H, W] -> [B, H*W, 4]
             preds_box_vec.append(rearrange(pred_box_vec_raw, "B X h w -> B (h w) X"))
             
         preds_cls = torch.concat(preds_cls, dim=1)
