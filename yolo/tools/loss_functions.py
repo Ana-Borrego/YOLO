@@ -309,7 +309,8 @@ class DualLoss:
     def __call__(self, 
         aux_predicts: Tuple[List[Tuple], List[Tensor]], # (detect_list, coeffs_list)
         main_predicts: Tuple[List[Tuple], List[Tensor]], # (detect_list, coeffs_list)
-        proto: Tensor, 
+        proto_main: Tensor, # Prototipo de Main
+        proto_aux: Tensor,  # Prototipo de Aux
         targets: Dict
     ) -> Tuple[Tensor, Dict[str, float]]:
         
@@ -319,9 +320,10 @@ class DualLoss:
             main_detect_raw, main_coeffs_raw = main_predicts
 
             # Pasar las listas separadas a YOLOSegmentationLoss
-            aux_iou, aux_dfl, aux_cls, aux_mask = self.loss(aux_detect_raw, aux_coeffs_raw, proto, targets) # type: ignore
-            main_iou, main_dfl, main_cls, main_mask = self.loss(main_detect_raw, main_coeffs_raw, proto, targets) # type: ignore
-
+            # Pasar el prototipo AUX a la pérdida AUX
+            aux_iou, aux_dfl, aux_cls, aux_mask = self.loss(aux_detect_raw, aux_coeffs_raw, proto_aux, targets) # type: ignore
+            # Pasar el prototipo MAIN a la pérdida MAIN
+            main_iou, main_dfl, main_cls, main_mask = self.loss(main_detect_raw, main_coeffs_raw, proto_main, targets) # type: ignore
             total_loss = [
                 self.iou_rate * (aux_iou * self.aux_rate + main_iou),
                 self.dfl_rate * (aux_dfl * self.aux_rate + main_dfl),

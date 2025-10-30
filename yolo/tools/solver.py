@@ -99,32 +99,32 @@ class TrainModel(ValidateModel):
         predicts = self(images) # Salida del modelo (diccionario)
         
         # DEBUG: Inspeccionar salida del modelo ---
-        if batch_idx == 0: 
-            print("\n--- DEBUG: Salida del Modelo (predicts) ---")
-            print(f"Claves encontradas: {list(predicts.keys())}")
+        # if batch_idx == 0: 
+        #     print("\n--- DEBUG: Salida del Modelo (predicts) ---")
+        #     print(f"Claves encontradas: {list(predicts.keys())}")
 
-            def print_nested_shapes(item, indent=""):
-                """Función recursiva para imprimir formas de tensores anidados."""
-                if isinstance(item, torch.Tensor):
-                    print(f"{indent}Tensor{item.shape}")
-                elif isinstance(item, (list, tuple)):
-                    # Si es lista/tupla vacía, indicarlo
-                    if not item:
-                         print(f"{indent}Empty List/Tuple []")
-                         return 
-                    # Si no está vacía, imprimir tipo y longitud, luego iterar
-                    print(f"{indent}{type(item).__name__} con {len(item)} elementos:")
-                    for i, sub_item in enumerate(item):
-                        print(f"{indent}  Item {i}:")
-                        print_nested_shapes(sub_item, indent + "    ")
-                else:
-                    print(f"{indent}Tipo: {type(item)}")
+        #     def print_nested_shapes(item, indent=""):
+        #         """Función recursiva para imprimir formas de tensores anidados."""
+        #         if isinstance(item, torch.Tensor):
+        #             print(f"{indent}Tensor{item.shape}")
+        #         elif isinstance(item, (list, tuple)):
+        #             # Si es lista/tupla vacía, indicarlo
+        #             if not item:
+        #                  print(f"{indent}Empty List/Tuple []")
+        #                  return 
+        #             # Si no está vacía, imprimir tipo y longitud, luego iterar
+        #             print(f"{indent}{type(item).__name__} con {len(item)} elementos:")
+        #             for i, sub_item in enumerate(item):
+        #                 print(f"{indent}  Item {i}:")
+        #                 print_nested_shapes(sub_item, indent + "    ")
+        #         else:
+        #             print(f"{indent}Tipo: {type(item)}")
 
-            for key, value in predicts.items():
-                print(f"  '{key}':")
-                print_nested_shapes(value, indent="    ") # Llamar a la función recursiva
+        #     for key, value in predicts.items():
+        #         print(f"  '{key}':")
+        #         print_nested_shapes(value, indent="    ") # Llamar a la función recursiva
 
-            print("--- FIN DEBUG ---")
+        #     print("--- FIN DEBUG ---")
         # ---------------------------------------------------------
         
         # Extracción de salidas y llamada a loss_fn ---
@@ -141,27 +141,26 @@ class TrainModel(ValidateModel):
             aux_seg_list = aux_outputs[1]    # Esto es Item 1: la lista de [coeffs..., proto]
             main_seg_list = main_outputs[1]  # Esto es Item 1: la lista de [coeffs..., proto]
 
-            # 3. Extraer Prototipos
-            # El DEBUG muestra que Item 1 (main_seg_list) tiene 4 tensores. El último es el proto.
+            # 3. Extraer AMBOS Prototipos
             if isinstance(main_seg_list, list) and len(main_seg_list) > 0 and isinstance(main_seg_list[-1], torch.Tensor):
-                 proto = main_seg_list[-1]         # El último tensor es el prototipo
-                 main_coeffs_raw = main_seg_list[:-1] # Todos menos el último son coeficientes
+                 proto_main = main_seg_list[-1]
+                 main_coeffs_raw = main_seg_list[:-1]
             else:
-                 # Este es el error que estabas viendo:
-                 raise ValueError(f"No se pudieron encontrar los prototipos en 'predicts[\"Main\"][1]'. Estructura encontrada: {main_seg_list}")
-
-            # 4. Extraer Coeficientes Auxiliares
-            if isinstance(aux_seg_list, list) and len(aux_seg_list) > 0:
-                 aux_coeffs_raw = aux_seg_list[:-1] # Asumimos que también tiene protos al final
+                 raise ValueError(f"No se pudieron encontrar los prototipos 'Main'.")
+            
+            if isinstance(aux_seg_list, list) and len(aux_seg_list) > 0 and isinstance(aux_seg_list[-1], torch.Tensor):
+                 proto_aux = aux_seg_list[-1]
+                 aux_coeffs_raw = aux_seg_list[:-1]
             else:
-                 aux_coeffs_raw = [] # O manejar error si se esperan siempre
+                 raise ValueError(f"No se pudieron encontrar los prototipos 'AUX'.")
 
-            # 5. Llamar a la función de pérdida
+            # 5. Llamar a la función de pérdida con ambos prototipos
             loss, loss_item = self.loss_fn(
-                (aux_detect_raw, aux_coeffs_raw), # Tupla (Detección_Aux, Coeficientes_Aux)
-                (main_detect_raw, main_coeffs_raw), # Tupla (Detección_Main, Coeficientes_Main)
-                proto, 
-                targets
+                (aux_detect_raw, aux_coeffs_raw),   # Tupla Aux
+                (main_detect_raw, main_coeffs_raw), # Tupla Main
+                proto_main, # Prototipos Main
+                proto_aux,  # Prototipos Aux
+                targets  # type: ignore
             )
         except KeyError as e:
             logger.error(f"Error: Clave esperada '{e}' no encontrada en la salida del modelo 'predicts'. Claves disponibles: {list(predicts.keys())}")
