@@ -67,6 +67,7 @@ class ValidateModel(BaseModel):
         # collate_fn returns (images, targets, rev_tensor, img_paths)
         images, targets, rev_tensor, img_paths = batch
         H, W = images.shape[2:]
+        batch_size = images.shape[0]
         
         # Añadir logging detallado
         logger.debug(f"Validation batch {batch_idx}: images.shape={images.shape}, targets len={len(targets)}")
@@ -89,8 +90,20 @@ class ValidateModel(BaseModel):
             if len(predicts) > 0:
                 logger.debug(f"First prediction keys: {predicts[0].keys() if isinstance(predicts[0], dict) else 'not dict'}")
             
+            # 'predicts' ya está en el formato correcto (lista de tensores, 1 por imagen)
+            # to_metrics_format espera [class, x1, y1, x2, y2, score]
             metrics_pred = [to_metrics_format(predict) for predict in predicts]
-            metrics_target = [to_metrics_format(target) for target in targets]
+
+            # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': ...}
+            # Necesitamos desagregarlo en una lista (1 por imagen) para la métrica
+            target_bboxes_flat = targets['bboxes'].to(self.device)
+            metrics_target = []
+            for i in range(batch_size):
+                mask = (target_bboxes_flat[:, 0] == i)
+                # Obtenemos [M, 5] (class_id, x1, y1, x2, y2)
+                bboxes_for_image = target_bboxes_flat[mask][:, 1:] 
+                # to_metrics_format espera [class, x1, y1, x2, y2]
+                metrics_target.append(to_metrics_format(bboxes_for_image))
             logger.debug(f"Metrics format - predictions: {len(metrics_pred)}, targets: {len(metrics_target)}")
             
             mAP = self.metric(metrics_pred, metrics_target)
