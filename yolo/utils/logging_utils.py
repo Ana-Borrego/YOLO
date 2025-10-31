@@ -222,6 +222,29 @@ class YOLORichModelSummary(RichModelSummary):
 
 
 class ImageLogger(Callback):
+    def __init__(self, dataset_cfg, dataset_size: int, draw_gt=True, draw_predict=True, max_image_logging=16):
+        """
+        Inicializa el Callback para loggear imágenes.
+        
+        Args:
+            dataset_cfg: Configuración del dataset (para class_list).
+            dataset_size (int): Tamaño total del dataset de validación.
+            draw_gt (bool): Si es True, dibuja las ground truth boxes.
+            draw_predict (bool): Si es True, dibuja las predicciones.
+            max_image_logging (int): Número máximo de imágenes a loggear por época.
+        """
+        super().__init__()
+        self.draw_gt = draw_gt
+        self.draw_predict = draw_predict
+        self.idx2label = dataset_cfg.class_list
+        self.colors = dataset_cfg.class_color
+        self.max_image_logging = max_image_logging
+        self.dataset_size = dataset_size
+        self.logged_images = []
+
+    def on_validation_epoch_start(self, trainer: "Trainer", pl_module: "LightningModule") -> None:
+        self.logged_images = []
+
     def on_validation_batch_end(
         self,
         trainer: "Trainer",
@@ -231,85 +254,111 @@ class ImageLogger(Callback):
         batch_idx: int,
         dataloader_idx: int = 0,
     ) -> None:
-        if self.dataset_size <= self.max_image_logging:
+        # Asegurarse de que el logger esté disponible
+        if not trainer.logger:
+            return
             
-            # --- INICIO DE LA CORRECCIÓN ---
+        # Comprobar si ya hemos loggeado suficientes imágenes
+        if len(self.logged_images) >= self.max_image_logging:
+            return
+            
+        try:
             # 1. Desempaquetar correctamente los 4 elementos del batch
-            # El callback anterior 'expected 5, got 4'  era erróneo
-            try:
-                images, targets_dict, rev_tensor, img_paths = batch
-            except ValueError:
-                logger.warning("Callback de logging no pudo desempaquetar el batch de validación. Omitiendo log de imagen.")
-                return
+            images, targets_dict, rev_tensor, img_paths = batch
+        except ValueError:
+            logger.warning("Callback de logging no pudo desempaquetar el batch de validación. Omitiendo log de imagen.")
+            return
 
-            # 2. 'targets' ahora es un diccionario
-            # El error "AttributeError: 'dict' object has no attribute 'ndim'" 
-            # ocurría porque intentábamos acceder a 'targets.ndim'
+        # 2. 'targets' ahora es un diccionario
+        gt_boxes = targets_dict.get('bboxes') # [N_total, 6]
+        if gt_boxes is None:
+            logger.warning("Callback de logging: 'targets_dict' no tiene clave 'bboxes'. Omitiendo log de imagen.")
+            return
+        
+        # 3. Separar las bboxes por imagen para el logger
+        batch_size = images.shape[0]
+        gt_boxes_list = []
+        for i in range(batch_size):
+            mask = (gt_boxes[:, 0] == i)
+            gt_boxes_list.append(gt_boxes[mask])
             
-            # Extraer las bboxes del diccionario para el logger
-            # (El logger solo muestra bboxes, no máscaras)
-            gt_boxes = targets_dict.get('bboxes') # [N_total, 6]
-            if gt_boxes is None:
-                logger.warning("Callback de logging: 'targets_dict' no tiene clave 'bboxes'. Omitiendo log de imagen.")
-                return
+        # 'outputs' es una tupla (predicts, mAP) de validation_step
+        # 'predicts' es una lista de diccionarios [{'boxes':... 'labels':... 'scores':... 'masks':...}]
+        
+        # Manejar caso en que 'outputs' no sea lo esperado (ej. error en validation_step)
+        if outputs is None or not isinstance(outputs, (list, tuple)) or len(outputs) == 0:
+            logger.warning("Callback de logging: 'outputs' de validation_step es None o inválido. Omitiendo log de imagen.")
+            return
             
-            # 3. Separar las bboxes por imagen para el logger
-            # (El logger itera por 'batch_size', no por 'gt_boxes')
-            batch_size = images.shape[0]
-            gt_boxes_list = []
-            for i in range(batch_size):
-                mask = (gt_boxes[:, 0] == i)
-                gt_boxes_list.append(gt_boxes[mask])
+        predicts_list_of_dicts = outputs[0]
+        
+        # Convertir la salida de predicción a formato tensor [N, 6] que espera 'draw_bboxes'
+        predicts_list_of_tensors = []
+        for pred_dict in predicts_list_of_dicts:
+            # Asegurarse de que las claves existen
+            if not all(k in pred_dict for k in ['boxes', 'labels', 'scores']):
+                logger.warning(f"Callback de logging: Predicción incompleta. Claves: {pred_dict.keys()}. Omitiendo.")
+                continue
                 
-            # 'outputs' es una tupla (predicts, mAP) de validation_step
-            # 'predicts' es una lista de diccionarios [{'boxes':... 'labels':... 'scores':... 'masks':...}]
-            predicts_list_of_dicts = outputs[0]
+            boxes = pred_dict['boxes']
+            labels = pred_dict['labels'].unsqueeze(1)
+            scores = pred_dict['scores'].unsqueeze(1)
             
-            # Convertir la salida de predicción a formato tensor [N, 6] que espera 'draw_bboxes'
-            predicts_list_of_tensors = []
-            for pred_dict in predicts_list_of_dicts:
-                boxes = pred_dict['boxes']
-                labels = pred_dict['labels'].unsqueeze(1)
-                scores = pred_dict['scores'].unsqueeze(1)
-                # [N, 6] -> [class, x1, y1, x2, y2, score]
+            # [N, 6] -> [class, x1, y1, x2, y2, score]
+            # Asegurarse de que no haya tensores vacíos que rompan cat
+            if boxes.shape[0] > 0:
                 pred_tensor = torch.cat([labels, boxes, scores], dim=1)
-                predicts_list_of_tensors.append(pred_tensor)
-            
-            # --- FIN DE LA CORRECCIÓN ---
+            else:
+                pred_tensor = torch.empty(0, 6, device=labels.device) # Tensor vacío con forma correcta
+                
+            predicts_list_of_tensors.append(pred_tensor)
+        
+        # Asegurarse de que el dispositivo esté disponible
+        try:
+            device = pl_module.device
+        except AttributeError:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-            for idx in range(batch_size):
-                if idx in self.logged_images:
-                    continue
-                # Asegurarse de que usamos la lista de tensores [N, 6]
-                predict = predicts_list_of_tensors[idx].to(self.device)
-                # Y usamos la lista de tensores [M, 6]
-                target = gt_boxes_list[idx].to(self.device)
+        # Iterar y loggear imágenes
+        for idx in range(batch_size):
+            if (len(self.logged_images) + idx) >= self.max_image_logging:
+                break
                 
-                img_path = Path(img_paths[idx])
-                image = images[idx].to(self.device).float()
-                image = (image * 255.0).to(torch.uint8)
+            if (dataloader_idx * batch_size + idx) in self.logged_images:
+                continue
                 
-                # ... (resto de la función draw_bboxes sin cambios) ...
-                if self.draw_gt:
-                    image = draw_bboxes(
-                        image,
-                        target[:, 1:5],
-                        target[:, 0].int(),
-                        None,
-                        self.idx2label,
-                        colors=self.colors,
-                    )
-                if self.draw_predict:
-                    image = draw_bboxes(
-                        image,
-                        predict[:, 1:5],
-                        predict[:, 0].int(),
-                        predict[:, 5],
-                        self.idx2label,
-                        colors=self.colors,
-                    )
-                self.logger.log_image(key=img_path.name, images=[image.permute(1, 2, 0).cpu().numpy()])
-                self.logged_images.append(idx)
+            predict = predicts_list_of_tensors[idx].to(device)
+            target = gt_boxes_list[idx].to(device)
+            
+            img_path = Path(img_paths[idx])
+            image = images[idx].to(device).float()
+            image = (image * 255.0).to(torch.uint8)
+            
+            if self.draw_gt:
+                image = draw_bboxes(
+                    image,
+                    target[:, 1:5],
+                    target[:, 0].int(),
+                    None,
+                    self.idx2label,
+                    colors=self.colors,
+                )
+            if self.draw_predict:
+                image = draw_bboxes(
+                    image,
+                    predict[:, 1:5],
+                    predict[:, 0].int(),
+                    predict[:, 5],
+                    self.idx2label,
+                    colors=self.colors,
+                )
+            
+            # Asegurarse de que log_image existe en el logger
+            if hasattr(trainer.logger, 'log_image'):
+                trainer.logger.log_image(key=img_path.name, images=[image.permute(1, 2, 0).cpu().numpy()])
+                self.logged_images.append(dataloader_idx * batch_size + idx)
+            elif (dataloader_idx * batch_size + idx) == 0: # Loggear advertencia solo una vez
+                logger.warning("El logger actual no tiene el método 'log_image'. No se loggearán imágenes.")
 
 
 def setup_logger(logger_name, quite=False):

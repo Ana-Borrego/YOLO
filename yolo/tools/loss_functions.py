@@ -294,10 +294,33 @@ class YOLOSegmentationLoss:
             logger.info(f"[MaskLoss Debug] ¿Se encontraron segmentos? (len(pos_gt_segments)): {len(pos_gt_segments)}")
             
             if pos_gt_segments:
-                gt_masks_tensor = polygons_to_masks(pos_gt_segments, mask_h, mask_w).to(device).float()
+                
+                # --- INICIO NUEVA DEPURACIÓN ---
+                if is_rank_zero:
+                    # Inspeccionar las entradas de polygons_to_masks
+                    logger.info(f"[MaskLoss Debug] mask_h={mask_h}, mask_w={mask_w}")
+                    try:
+                        first_seg = pos_gt_segments[0]
+                        logger.info(f"[MaskLoss Debug] Shape primer segmento: {first_seg.shape}")
+                        logger.info(f"[MaskLoss Debug] Coords min/max: {first_seg.min()}/{first_seg.max()}")
+                    except Exception as e:
+                        logger.error(f"[MaskLoss Debug] Error al inspeccionar segmento: {e}")
+                # --- FIN NUEVA DEPURACIÓN ---
+                
+                # --- INICIO NUEVA DEPURACIÓN ---
+                if is_rank_zero:
+                    # ¡¡Esta es la línea clave!! ¿Están las máscaras GT vacías?
+                    logger.info(f"[MaskLoss Debug] Suma de gt_masks_tensor: {gt_masks_tensor.sum().item()}")
+                # --- FIN NUEVA DEPURACIÓN ---
+
                 pos_proto = proto[batch_idx_for_valid]
                 pos_proto_flat = pos_proto.view(pos_proto.shape[0], pos_proto.shape[1], -1)
                 pred_masks_logits = torch.bmm(pos_coeffs.unsqueeze(1), pos_proto_flat).squeeze(1).view(-1, mask_h, mask_w)
+                
+                # --- INICIO NUEVA DEPURACIÓN ---
+                if is_rank_zero:
+                    logger.info(f"[MaskLoss Debug] Logits (predicciones) min/max: {pred_masks_logits.min().item()}/{pred_masks_logits.max().item()}")
+                # --- FIN NUEVA DEPURACIÓN ---
                 mask_loss_unweighted = self.bce_mask(pred_masks_logits, gt_masks_tensor)
                 
                 # Normalizar bboxes GT a tamaño de imagen (no tamaño de máscara)
@@ -313,6 +336,11 @@ class YOLOSegmentationLoss:
 
                 loss_mask_per_instance = mask_loss_cropped.mean(dim=(1, 2))
 
+                # --- INICIO NUEVA DEPURACIÓN ---
+                if is_rank_zero:
+                    logger.info(f"[MaskLoss Debug] Suma de loss_mask_per_instance: {loss_mask_per_instance.sum().item()}")
+                # --- FIN NUEVA DEPURACIÓN ---
+                
                 if box_norm.shape[0] != loss_mask_per_instance.shape[0]:
                     logger.warning(f"Mask Box norm shape mismatch: {box_norm.shape} vs loss_mask shape: {loss_mask_per_instance.shape}. Using mean.")
                     loss_mask = loss_mask_per_instance.mean()
