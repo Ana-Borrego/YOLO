@@ -524,7 +524,7 @@ class Vec2Box:
         
         # Debug
         if not isinstance(predicts, list):
-             raise TypeError(f"Vec2Box espera una Lista de Tuplas. Se recibió {type(predicts)}")
+            raise TypeError(f"Vec2Box espera una Lista de Tuplas. Se recibió {type(predicts)}")
         
         # Asegurar que predicts es una lista
         if isinstance(predicts, tuple):
