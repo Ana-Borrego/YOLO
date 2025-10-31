@@ -225,7 +225,10 @@ class ImageLogger(Callback):
     def on_validation_batch_end(self, trainer: Trainer, pl_module, outputs, batch, batch_idx) -> None:
         if batch_idx != 0:
             return
-        batch_size, images, targets, rev_tensor, img_paths = batch
+        # Desempaquetar correctamente los 4 elementos
+        images, targets, rev_tensor, img_paths = batch
+        # Obtener el batch_size de las imágenes
+        batch_size = images.shape[0]
         predicts, _ = outputs
         gt_boxes = targets[0] if targets.ndim == 3 else targets
         pred_boxes = predicts[0] if isinstance(predicts, list) else predicts

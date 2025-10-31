@@ -253,7 +253,14 @@ class YOLOSegmentationLoss:
 
         # 3. Calcular Pérdida de Máscara
         loss_mask = torch.tensor(0.0, device=device)
+        # DEBUG: COMPROBAR SI ENRAMOS EN EL BLOQUE DE MÁSCARAS: ----
+        if batch_size == 0: # Poner batch_size == 0 para loggear siempre
+            logger.info(f"[MaskLoss Debug] ¿Hay máscaras válidas? {valid_masks.any().item()}")
         if valid_masks.any():
+            
+            if batch_size == 0:
+                logger.info(f"[MaskLoss Debug] Total coincidencias válidas (valid_masks.sum): {valid_masks.sum().item()}")
+            # fin del debugg -------------------------
             mask_h, mask_w = proto.shape[-2:]
             
             pos_indices_flat = torch.where(valid_masks)
@@ -262,6 +269,17 @@ class YOLOSegmentationLoss:
             pos_gt_indices_flat = gt_indices[valid_masks]
 
             img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()
+            
+            # --- DEBUG: Comprobar bincount (potencial problema en DDP) ---
+            try:
+                counts = torch.bincount(img_indices_in_flat_targets, minlength=batch_size)
+                start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(counts, dim=0)[:-1]])
+            except RuntimeError as e:
+                logger.error(f"[MaskLoss Debug] Error en bincount/cumsum: {e}")
+                logger.error(f"img_indices_in_flat_targets: {img_indices_in_flat_targets}")
+                start_indices = torch.zeros(batch_size, dtype=torch.long, device=device)
+            # --- FIN DEBUG ---
+            
             start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(torch.bincount(img_indices_in_flat_targets), dim=0)[:-1]])
             batch_idx_for_valid = pos_indices_flat[0]
             global_gt_indices = start_indices[batch_idx_for_valid] + pos_gt_indices_flat
@@ -269,6 +287,11 @@ class YOLOSegmentationLoss:
             pos_gt_segments = [targets['segments'][idx] for idx in global_gt_indices.tolist()]
             pos_gt_bboxes_xyxy = padded_targets[pos_indices_flat[0], pos_gt_indices_flat.long()][:, 1:]
 
+            # --- DEBUG: Comprobar si encontramos segmentos ---
+            if batch_size == 0:
+                logger.info(f"[MaskLoss Debug] ¿Se encontraron segmentos? (len(pos_gt_segments)): {len(pos_gt_segments)}")
+            # --- FIN DEBUG ---
+            
             if pos_gt_segments:
                 gt_masks_tensor = polygons_to_masks(pos_gt_segments, mask_h, mask_w).to(device).float()
                 pos_proto = proto[batch_idx_for_valid]
@@ -294,6 +317,11 @@ class YOLOSegmentationLoss:
                     loss_mask = loss_mask_per_instance.mean()
                 else:
                     loss_mask = (loss_mask_per_instance * box_norm).sum() / cls_norm
+                
+                # --- DEBUG: Loggear la pérdida calculada ---
+                if batch_size == 0:
+                    logger.info(f"[MaskLoss Debug] Valor de loss_mask calculado: {loss_mask.item()}")
+                # --- FIN DEBUG ---
 
         return loss_iou, loss_dfl, loss_cls, loss_mask
 
