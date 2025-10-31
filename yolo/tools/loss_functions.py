@@ -265,8 +265,7 @@ class YOLOSegmentationLoss:
         # --- FIN DEBUG ---
         if valid_masks.any():
             
-            if batch_size == 0:
-                logger.info(f"[MaskLoss Debug] Total coincidencias válidas (valid_masks.sum): {valid_masks.sum().item()}")
+            logger.info(f"[MaskLoss Debug] Total coincidencias válidas (valid_masks.sum): {valid_masks.sum().item()}")
             # fin del debugg -------------------------
             mask_h, mask_w = proto.shape[-2:]
             
@@ -292,9 +291,7 @@ class YOLOSegmentationLoss:
             pos_gt_bboxes_xyxy = padded_targets[pos_indices_flat[0], pos_gt_indices_flat.long()][:, 1:]
 
             # --- DEBUG: Comprobar si encontramos segmentos ---
-            if batch_size == 0:
-                logger.info(f"[MaskLoss Debug] ¿Se encontraron segmentos? (len(pos_gt_segments)): {len(pos_gt_segments)}")
-            # --- FIN DEBUG ---
+            logger.info(f"[MaskLoss Debug] ¿Se encontraron segmentos? (len(pos_gt_segments)): {len(pos_gt_segments)}")
             
             if pos_gt_segments:
                 gt_masks_tensor = polygons_to_masks(pos_gt_segments, mask_h, mask_w).to(device).float()
@@ -323,8 +320,7 @@ class YOLOSegmentationLoss:
                     loss_mask = (loss_mask_per_instance * box_norm).sum() / cls_norm
                 
                 # --- DEBUG: Loggear la pérdida calculada ---
-                if batch_size == 0:
-                    logger.info(f"[MaskLoss Debug] Valor de loss_mask calculado: {loss_mask.item()}")
+                logger.info(f"[MaskLoss Debug] Valor de loss_mask calculado: {loss_mask.item()}")
                 # --- FIN DEBUG ---
 
         return loss_iou, loss_dfl, loss_cls, loss_mask
