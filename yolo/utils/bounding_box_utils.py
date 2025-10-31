@@ -181,9 +181,9 @@ class BoxMatcher:
         # logger.debug(f"max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
         # Debugg 2
         
-        if torch.rand(1) < 0.1: # Loggear 10% de las veces para no inundar
-            logger.debug(f"BoxMatcher DEBUG: reg_max={self.reg_max}")
-            logger.debug(f"BoxMatcher DEBUG: max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
+        # if torch.rand(1) < 0.1: # Loggear 10% de las veces para no inundar
+        #     logger.debug(f"BoxMatcher DEBUG: reg_max={self.reg_max}")
+        #     logger.debug(f"BoxMatcher DEBUG: max_reg_dist stats: min={max_reg_dist.min().item():.2f}, max={max_reg_dist.max().item():.2f}")
         
         # Relajar ligeramente las condiciones y agregar más logging
         # Eliminamos 'target_on_anchor' que es demasiado restrictiva.
@@ -193,7 +193,7 @@ class BoxMatcher:
         
         # Debug final
         # logger.debug(f"Valid matches: target_on_anchor={target_on_anchor.sum().item()}, target_in_reg_max={target_in_reg_max.sum().item()}")
-        logger.debug(f"target_in_reg_max es igual a: {target_in_reg_max}")
+        # logger.debug(f"target_in_reg_max es igual a: {target_in_reg_max}")
         return target_in_reg_max
 
     def get_cls_matrix(self, predict_cls: Tensor, target_cls: Tensor) -> Tensor:
@@ -522,6 +522,10 @@ class Vec2Box:
     def __call__(self, predicts: List[Tuple[Tensor, ...]]):
         preds_cls, preds_box_dist, preds_box_vec = [], [], []
         
+        # Debug
+        if not isinstance(predicts, list):
+             raise TypeError(f"Vec2Box espera una Lista de Tuplas. Se recibió {type(predicts)}")
+        
         # Asegurar que predicts es una lista
         if isinstance(predicts, tuple):
             predicts = [predicts]
@@ -539,6 +543,7 @@ class Vec2Box:
             #     pred_box_dist_raw = pred_box_raw
             #     pred_box_vec_raw = pred_box_raw
             # el
+            # Manejar formato DFL (cls, dist, vec)
             if len(layer_output) == 3:
                 # Formato: (class_x, anchor_x_raw, vector_x)
                 pred_cls, pred_box_dist_raw, pred_box_vec_raw = layer_output

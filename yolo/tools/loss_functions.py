@@ -40,7 +40,8 @@ class BoxLoss(nn.Module):
             return torch.tensor(0.0, device=predicts_bbox.device)
 
         # Calcular IoU diagonalmente (cada predicción con su target asignado)
-        iou = calculate_iou(picked_predict.unsqueeze(1), picked_targets.unsqueeze(0), "ciou") # [N_valid, N_valid]
+        # iou = calculate_iou(picked_predict.unsqueeze(1), picked_targets.unsqueeze(0), "ciou") # (3D)
+        iou = calculate_iou(picked_predict, picked_targets, "ciou") # [N_valid, N_valid] (2D)
         iou_diag = torch.diag(iou).clamp(0, 1) # Asegurar que esté en [0, 1]
 
         loss_iou = 1.0 - iou_diag
@@ -233,12 +234,12 @@ class YOLOSegmentationLoss:
             padded_targets, (predicts_cls.detach(), predicts_box_xyxy.detach())
         )
         # DEBUG: información del matcher
-        try:
-            logger.debug(
-                f"After matcher: valid_masks.any={valid_masks.any().item()}, total_valid={valid_masks.sum().item()}, gt_indices_unique={torch.unique(gt_indices).tolist()[:10]}"
-            )
-        except Exception:
-            logger.debug("After matcher: Could not compute debug stats for valid_masks/gt_indices")
+        # try:
+        #     logger.debug(
+        #         f"After matcher: valid_masks.any={valid_masks.any().item()}, total_valid={valid_masks.sum().item()}, gt_indices_unique={torch.unique(gt_indices).tolist()[:10]}"
+        #     )
+        # except Exception:
+        #     logger.debug("After matcher: Could not compute debug stats for valid_masks/gt_indices")
         targets_cls, targets_bbox = align_targets.split((self.class_num, 4), dim=-1)
 
         cls_norm = max(targets_cls.sum(), 1)
