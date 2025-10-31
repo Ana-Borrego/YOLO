@@ -2,7 +2,7 @@ import os
 from copy import deepcopy
 from math import exp
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -17,6 +17,7 @@ from yolo.config.config import IDX_TO_ID, NMSConfig, OptimizerConfig, SchedulerC
 from yolo.model.yolo import YOLO
 from yolo.utils.bounding_box_utils import Anc2Box, Vec2Box, bbox_nms, transform_bbox
 from yolo.utils.logger import logger
+from torchvision.ops import batched_nms
 
 import torch.nn.functional as F
 from yolo.utils.ops import crop_mask
