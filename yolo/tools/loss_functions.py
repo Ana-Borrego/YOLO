@@ -280,7 +280,7 @@ class YOLOSegmentationLoss:
                 # self.vec2box.image_size es [W, H], necesitamos [W, H, W, H]
                 # Da error de tipo self.vec2box.image_size es un ListConfig -- debe ser una lista. 
                 # image_size_list = self.vec2box.image_size.to_list()
-                image_size_list = self.vec2box.image_size.to_list()
+                image_size_list = list(self.vec2box.image_size)
                 image_size_tensor = torch.tensor(image_size_list * 2, device=device)
                 image_size_tensor = torch.tensor(self.vec2box.image_size * 2, device=device)
                 pos_gt_bboxes_norm_img = pos_gt_bboxes_xyxy / image_size_tensor
