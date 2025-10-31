@@ -277,7 +277,7 @@ class YOLOSegmentationLoss:
                 mask_loss_unweighted = self.bce_mask(pred_masks_logits, gt_masks_tensor)
                 
                 # Normalizar bboxes GT a tamaño de imagen (no tamaño de máscara)
-                self.vec2box.image_size es [W, H], necesitamos [W, H, W, H]
+                # self.vec2box.image_size es [W, H], necesitamos [W, H, W, H]
                 # Da error de tipo self.vec2box.image_size es un ListConfig -- debe ser una lista. 
                 # image_size_list = self.vec2box.image_size.to_list()
                 image_size_tensor = torch.tensor(self.vec2box.image_size * 2, device=device)
