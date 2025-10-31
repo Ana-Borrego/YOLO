@@ -241,6 +241,7 @@ class TrainModel(ValidateModel):
             loss_item,
             prog_bar=True,
             on_epoch=True,
+            on_step=True, # ver las métricas por pasos
             batch_size=batch_size,
             rank_zero_only=True,
         )

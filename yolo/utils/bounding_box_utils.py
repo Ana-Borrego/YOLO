@@ -681,10 +681,27 @@ def calculate_map(predictions, ground_truths) -> Dict[str, Tensor]:
     return mAP
 
 
-def to_metrics_format(prediction: Tensor):
-    prediction = prediction[prediction[:, 0] != -1]
-    bbox = {"boxes": prediction[:, 1:5], "labels": prediction[:, 0].int()}
-    if prediction.size(1) == 6:
-        bbox["scores"] = prediction[:, 5]
-    return bbox 
-
+def to_metrics_format(prediction: Union[Tensor, Dict[str, Tensor]]):
+    
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Manejar el formato antiguo (solo tensor) Y el nuevo (dict)
+    if isinstance(prediction, torch.Tensor):
+        # Formato antiguo (Tensor [N, 6] o [N, 5])
+        # Asegurarse de que no filtramos si es un target (sin padding -1)
+        if (prediction.numel() > 0 and prediction[0, 0] != -1):
+            prediction = prediction[prediction[:, 0] != -1]
+        
+        bbox = {"boxes": prediction[:, 1:5], "labels": prediction[:, 0].int()}
+        if prediction.size(1) == 6:
+            bbox["scores"] = prediction[:, 5]
+        return bbox
+    
+    elif isinstance(prediction, dict):
+        # Nuevo formato (Dict)
+        # No es necesario filtrar por -1, PostProcess ya lo ha hecho
+        # El diccionario ya tiene las claves correctas: 'boxes', 'labels', 'scores', 'masks'
+        return prediction
+    
+    else:
+        raise TypeError(f"Formato de predicción no reconocido: {type(prediction)}")
+    # --- FIN DE LA MODIFICACIÓN ---
