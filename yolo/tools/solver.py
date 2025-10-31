@@ -6,8 +6,6 @@ from lightning import LightningModule
 from torchmetrics.detection import MeanAveragePrecision
 
 from yolo.utils.logger import logger
-from yolo.config.config import Config, TrainConfig 
-from omegaconf import OmegaConf
 from yolo.config.config import Config
 from yolo.model.yolo import create_model
 from yolo.tools.data_loader import create_dataloader
@@ -15,6 +13,8 @@ from yolo.tools.drawer import draw_bboxes
 from yolo.tools.loss_functions import create_loss_function
 from yolo.utils.bounding_box_utils import create_converter, to_metrics_format
 from yolo.utils.model_utils import PostProcess, create_optimizer, create_scheduler
+from yolo.tools.loss_functions import polygons_to_masks
+import numpy as np
 
 
 class BaseModel(LightningModule):
@@ -64,46 +64,80 @@ class ValidateModel(BaseModel):
         return self.val_loader
 
     def validation_step(self, batch, batch_idx):
-        # collate_fn returns (images, targets, rev_tensor, img_paths)
+        # collate_fn returns (images, targets_dict, rev_tensor, img_paths)
         images, targets, rev_tensor, img_paths = batch
         H, W = images.shape[2:]
         batch_size = images.shape[0]
         
         # Añadir logging detallado
-        logger.debug(f"Validation batch {batch_idx}: images.shape={images.shape}, targets len={len(targets)}")
+        logger.debug(f"Validation batch {batch_idx}: images.shape={images.shape}, targets keys={list(targets.keys()) if isinstance(targets, dict) else 'not dict'}")
         
         # Obtener y analizar la salida del modelo
         model_output = self.ema(images)
         logger.debug(f"Model output type: {type(model_output)}")
-        if isinstance(model_output, (tuple, list)):
-            logger.debug(f"Model output elements: {[type(x) for x in model_output]}")
-            logger.debug(f"Model output shapes: {[x.shape if isinstance(x, torch.Tensor) else 'not tensor' for x in model_output]}")
-        elif isinstance(model_output, dict):
+        if isinstance(model_output, dict):
             logger.debug(f"Model output keys: {model_output.keys()}")
-            logger.debug(f"Model output shapes: {[(k, v.shape) if isinstance(v, torch.Tensor) else (k, type(v)) for k, v in model_output.items()]}")
         
         # Post-proceso y métricas
         try:
+            # 'predicts' es una Lista de DICTS (uno por imagen)
+            # Cada dict tiene {'boxes', 'labels', 'scores', 'masks'}
             predicts = self.post_process(model_output, image_size=[W, H])
             logger.debug(f"Post-process output type: {type(predicts)}")
             logger.debug(f"Number of predictions: {len(predicts)}")
             if len(predicts) > 0:
                 logger.debug(f"First prediction keys: {predicts[0].keys() if isinstance(predicts[0], dict) else 'not dict'}")
             
-            # 'predicts' ya está en el formato correcto (lista de tensores, 1 por imagen)
-            # to_metrics_format espera [class, x1, y1, x2, y2, score]
+            # --- PREPARAR PREDICCIONES (metrics_pred) ---
+            # to_metrics_format maneja el diccionario de predicción
             metrics_pred = [to_metrics_format(predict) for predict in predicts]
 
-            # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': ...}
-            # Necesitamos desagregarlo en una lista (1 por imagen) para la métrica
+            # --- INICIO DE LA CORRECCIÓN MÁSCARAS GT ---
+            
+            # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': [N_total_segments]}
             target_bboxes_flat = targets['bboxes'].to(self.device)
+            target_segments_list = targets['segments'] # Lista de arrays np (en CPU)
+            
+            # Necesitamos la lógica de "start_indices" para mapear segmentos a imágenes
+            img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()
+            # Bincount debe ejecutarse en CPU si el tensor es pequeño, o en el dispositivo
+            img_indices_cpu = img_indices_in_flat_targets.cpu()
+            counts = torch.bincount(img_indices_cpu, minlength=batch_size)
+            start_indices = torch.cat([
+                torch.tensor([0]), 
+                torch.cumsum(counts, dim=0)[:-1]
+            ]).tolist() # Convertir a lista de ints de Python
+
             metrics_target = []
             for i in range(batch_size):
                 mask = (target_bboxes_flat[:, 0] == i)
-                # Obtenemos [M, 5] (class_id, x1, y1, x2, y2)
-                bboxes_for_image = target_bboxes_flat[mask][:, 1:] 
-                # to_metrics_format espera [class, x1, y1, x2, y2]
-                metrics_target.append(to_metrics_format(bboxes_for_image))
+                # bboxes_for_image es [M, 5] (class_id, x1, y1, x2, y2)
+                bboxes_for_image = target_bboxes_flat[mask][:, 1:] # En self.device
+                
+                num_gts = bboxes_for_image.shape[0]
+                
+                # Obtener los segmentos para esta imagen
+                start_idx = start_indices[i]
+                segments_for_image = target_segments_list[start_idx : start_idx + num_gts]
+
+                # Rasterizar máscaras
+                if num_gts > 0:
+                    # polygons_to_masks espera polígonos (0-1) y tamaño (H, W)
+                    # El PostProcess también genera máscaras de tamaño (H, W)
+                    gt_masks_tensor = polygons_to_masks(segments_for_image, H, W).to(self.device) # [M, H, W]
+                else:
+                    gt_masks_tensor = torch.empty(0, H, W, device=self.device)
+
+                # Construir el diccionario de target requerido por torchmetrics
+                target_dict = {
+                    "boxes": bboxes_for_image[:, 1:], # [M, 4] (xyxy)
+                    "labels": bboxes_for_image[:, 0].int(), # [M]
+                    "masks": gt_masks_tensor.bool() # [M, H, W] (Bool)
+                }
+                metrics_target.append(target_dict)
+            
+            # --- FIN DE LA CORRECCIÓN ---
+
             logger.debug(f"Metrics format - predictions: {len(metrics_pred)}, targets: {len(metrics_target)}")
             
             mAP = self.metric(metrics_pred, metrics_target)
@@ -112,6 +146,9 @@ class ValidateModel(BaseModel):
         except Exception as e:
             logger.error(f"Error in validation step: {str(e)}")
             logger.error(f"Error type: {type(e)}")
+            # Imprimir la traza completa para una mejor depuración
+            import traceback
+            logger.error(traceback.format_exc())
             raise
 
     def on_validation_epoch_end(self):
@@ -235,6 +272,9 @@ class TrainModel(ValidateModel):
             logger.error("Verifica la estructura devuelta por 'MultiheadSegmentation' y la esperada por 'YOLOSegmentationLoss.__call__'.")
             # breakpoint()
             raise
+        
+        # Show loss functions values
+        logger.info(f"Batch {batch_idx} | Losses: {loss_item}")
         
         # Logging (sin cambios)
         self.log_dict(
