@@ -253,9 +253,16 @@ class YOLOSegmentationLoss:
 
         # 3. Calcular Pérdida de Máscara
         loss_mask = torch.tensor(0.0, device=device)
-        # DEBUG: COMPROBAR SI ENRAMOS EN EL BLOQUE DE MÁSCARAS: ----
-        if batch_size == 0: # Poner batch_size == 0 para loggear siempre
+        # --- INICIO DEBUG (CORREGIDO) ---
+        # Solo loggear desde el rank 0 para evitar spam en DDP
+        try:
+            is_rank_zero = (torch.distributed.is_initialized() and torch.distributed.get_rank() == 0) or not torch.distributed.is_initialized()
+        except Exception:
+            is_rank_zero = True # Asumir True si falla (ej. no DDP)
+
+        if is_rank_zero:
             logger.info(f"[MaskLoss Debug] ¿Hay máscaras válidas? {valid_masks.any().item()}")
+        # --- FIN DEBUG ---
         if valid_masks.any():
             
             if batch_size == 0:
@@ -270,15 +277,12 @@ class YOLOSegmentationLoss:
 
             img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()
             
-            # --- DEBUG: Comprobar bincount (potencial problema en DDP) ---
-            try:
-                counts = torch.bincount(img_indices_in_flat_targets, minlength=batch_size)
-                start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(counts, dim=0)[:-1]])
-            except RuntimeError as e:
-                logger.error(f"[MaskLoss Debug] Error en bincount/cumsum: {e}")
-                logger.error(f"img_indices_in_flat_targets: {img_indices_in_flat_targets}")
-                start_indices = torch.zeros(batch_size, dtype=torch.long, device=device)
-            # --- FIN DEBUG ---
+            # --- INICIO DE LA CORRECCIÓN BINCOUNT ---
+            # Asegurarse de que bincount tenga en cuenta el batch_size completo,
+            # incluso si las últimas imágenes no tienen bboxes.
+            counts = torch.bincount(img_indices_in_flat_targets, minlength=batch_size)
+            start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(counts, dim=0)[:-1]])
+            # --- FIN DE LA CORRECCIÓN BINCOUNT ---
             
             start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(torch.bincount(img_indices_in_flat_targets), dim=0)[:-1]])
             batch_idx_for_valid = pos_indices_flat[0]
