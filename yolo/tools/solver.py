@@ -16,6 +16,7 @@ from yolo.utils.model_utils import PostProcess, create_optimizer, create_schedul
 from yolo.tools.loss_functions import polygons_to_masks
 from yolo.utils.solver_utils import make_ap_table
 import numpy as np
+from rich import print
 
 
 class BaseModel(LightningModule):
@@ -158,7 +159,7 @@ class ValidateModel(BaseModel):
         max_result = np.zeros(12)
         ap_table, _ = make_ap_table(score, max_result=max_result, epoch=self.current_epoch)
         logger.info(f"Resultados de Validación Época {self.current_epoch}:")
-        logger.info(ap_table)
+        print(ap_table)
         del epoch_metrics["classes"]
         self.log_dict(epoch_metrics, prog_bar=True, sync_dist=True, rank_zero_only=True)
         self.log_dict(
@@ -185,13 +186,13 @@ class TrainModel(ValidateModel):
         return self.train_loader
 
     def on_train_epoch_start(self):
-        self.trainer.optimizers[0].next_epoch( # type: ignore
-            ceil(len(self.train_loader) / self.trainer.world_size), self.current_epoch
-        )
+        # self.trainer.optimizers[0].next_epoch( # type: ignore
+        #     ceil(len(self.train_loader) / self.trainer.world_size), self.current_epoch
+        # )
         self.vec2box.update(self.cfg.image_size)
 
     def training_step(self, batch, batch_idx):
-        lr_dict = self.trainer.optimizers[0].next_batch() # type: ignore
+        # lr_dict = self.trainer.optimizers[0].next_batch() # type: ignore
         # Ahora batch = (images, targets_dict, rev_tensor, img_paths)
         images, targets, *_ = batch 
         batch_size = images.shape[0]
@@ -265,7 +266,7 @@ class TrainModel(ValidateModel):
         except Exception:
             # No fallar por problemas de logging
             pass
-        self.log_dict(lr_dict, prog_bar=False, logger=True, on_epoch=False, rank_zero_only=True)
+        #self.log_dict(lr_dict, prog_bar=False, logger=True, on_epoch=False, rank_zero_only=True)
         return loss # No multiplicar por batch_size si la pérdida ya está normalizada por lote
 
     def configure_optimizers(self):

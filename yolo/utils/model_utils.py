@@ -85,51 +85,41 @@ class EMA(Callback):
 
 
 def create_optimizer(model: YOLO, optim_cfg: OptimizerConfig) -> Optimizer:
-    """Create an optimizer for the given model parameters based on the configuration.
-
-    Returns:
-        An instance of the optimizer configured according to the provided settings.
     """
+    Crea un optimizador para el modelo dado basado en la configuración.
+    Esta versión es 'limpia' y compatible con los schedulers de Lightning.
+    """
+    # 1. Obtiene el tipo de optimizador desde el config (ej. 'AdamW')
     optimizer_class: Type[Optimizer] = getattr(torch.optim, optim_cfg.type)
 
-    bias_params = [p for name, p in model.named_parameters() if "bias" in name]
-    norm_params = [p for name, p in model.named_parameters() if "weight" in name and "bn" in name]
-    conv_params = [p for name, p in model.named_parameters() if "weight" in name and "bn" not in name]
+    # 2. Configuración estándar para separar parámetros
+    # (Esto es una buena práctica y no entra en conflicto)
+    bias_params = []
+    norm_params = []
+    conv_params = []
+    for name, p in model.named_parameters():
+        if p.requires_grad: # Asegurarse de que el parámetro se entrena
+            if "bias" in name:
+                bias_params.append(p)
+            elif "bn" in name or "norm" in name:
+                norm_params.append(p)
+            else:
+                conv_params.append(p)
 
+    # 3. Asigna los parámetros a grupos de optimización
+    #    Solo 'conv_params' usará el 'weight_decay' de tu config.
     model_parameters = [
-        {"params": bias_params, "momentum": 0.937, "weight_decay": 0},
-        {"params": conv_params, "momentum": 0.937},
-        {"params": norm_params, "momentum": 0.937, "weight_decay": 0},
+        {"params": bias_params, "weight_decay": 0},  # No aplicar decay a los bias
+        {"params": norm_params, "weight_decay": 0},  # No aplicar decay a las capas norm
+        {"params": conv_params}, # weight_decay se cogerá de optim_cfg.args
     ]
 
-    def next_epoch(self, batch_num, epoch_idx):
-        self.min_lr = self.max_lr
-        self.max_lr = [param["lr"] for param in self.param_groups]
-        # TODO: load momentum from config instead a fix number
-        #       0.937: Start Momentum
-        #       0.8  : Normal Momemtum
-        #       3    : The warm up epoch num
-        self.min_mom = lerp(0.8, 0.937, min(epoch_idx, 3), 3)
-        self.max_mom = lerp(0.8, 0.937, min(epoch_idx + 1, 3), 3)
-        self.batch_num = batch_num
-        self.batch_idx = 0
-
-    def next_batch(self):
-        self.batch_idx += 1
-        lr_dict = dict()
-        for lr_idx, param_group in enumerate(self.param_groups):
-            min_lr, max_lr = self.min_lr[lr_idx], self.max_lr[lr_idx]
-            param_group["lr"] = lerp(min_lr, max_lr, self.batch_idx, self.batch_num)
-            param_group["momentum"] = lerp(self.min_mom, self.max_mom, self.batch_idx, self.batch_num)
-            lr_dict[f"LR/{lr_idx}"] = param_group["lr"]
-            lr_dict[f"momentum/{lr_idx}"] = param_group["momentum"]
-        return lr_dict
-
-    optimizer_class.next_batch = next_batch
-    optimizer_class.next_epoch = next_epoch
-
-    optimizer = optimizer_class(model_parameters, **optim_cfg.args)
-    optimizer.max_lr = [0.1, 0, 0]
+    # 4. Crea el optimizador usando los argumentos de optim_cfg.args
+    #    (ej. lr=0.01, weight_decay=0.0005)
+    optimizer = optimizer_class(model_parameters, **optim_cfg.args) # type: ignore
+    
+    # 5. Devuelve el optimizador limpio.
+    #    No se añaden 'next_batch' ni 'next_epoch'.
     return optimizer
 
 
