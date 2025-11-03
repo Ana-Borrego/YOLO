@@ -157,8 +157,8 @@ class ValidateModel(BaseModel):
         # Crear e imprimir la tabla
         max_result = np.zeros(12)
         ap_table, _ = make_ap_table(score, max_result=max_result, epoch=self.current_epoch)
-        logger.info(f"Resultados de Validación Época {self.current_epoch}:\n{ap_table}")
-        
+        logger.info(f"Resultados de Validación Época {self.current_epoch}:")
+        logger.info(ap_table)
         del epoch_metrics["classes"]
         self.log_dict(epoch_metrics, prog_bar=True, sync_dist=True, rank_zero_only=True)
         self.log_dict(

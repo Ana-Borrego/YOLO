@@ -31,7 +31,7 @@ def main(cfg: Config):
         enable_progress_bar=not getattr(cfg, "quite", False),
         default_root_dir=save_path,
         num_sanity_val_steps=0,
-        strategy=DDPStrategy(find_unused_parameters=True)
+        strategy=DDPStrategy(find_unused_parameters=False)
     )
 
     if cfg.task.task == "train":
