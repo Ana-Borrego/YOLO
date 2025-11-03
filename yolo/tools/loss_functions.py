@@ -261,29 +261,10 @@ class YOLOSegmentationLoss:
                 pred_masks_logits = torch.bmm(pos_coeffs.unsqueeze(1), pos_proto_flat).squeeze(1).view(-1, mask_h, mask_w)
                 
                 mask_loss_unweighted = self.bce_mask(pred_masks_logits, gt_masks_tensor)
-
-                # DEBUGG # ---------------------------
-                if is_rank_zero:
-                    # 1. ¿Tiene pérdida la máscara sin recortar?
-                    logger.info(f"[MaskLoss Debug] Suma de mask_loss_unweighted (ANTES de crop): {mask_loss_unweighted.sum().item()}")
-                    
-                    # 2. ¿Son válidas las bboxes para el crop?
-                    # Comprobar si hay bboxes con área 0 o negativa (x2 <= x1)
-                    widths = pos_gt_bboxes_norm[:, 2] - pos_gt_bboxes_norm[:, 0]
-                    heights = pos_gt_bboxes_norm[:, 3] - pos_gt_bboxes_norm[:, 1]
-                    invalid_boxes = (widths <= 0) | (heights <= 0)
-                    logger.info(f"[MaskLoss Debug] BBoxes (norm 0-1) stats min/max: {pos_gt_bboxes_norm.min().item()}/{pos_gt_bboxes_norm.max().item()}")
-                    logger.info(f"[MaskLoss Debug] ¿Cuántas bboxes inválidas (área<=0)?: {invalid_boxes.sum().item()} / {pos_gt_bboxes_norm.shape[0]}")
-                # --- FIN ---
                 
                 # Recortar (crop_mask espera bboxes normalizadas a [0, 1] -- ya las tenemos normalizadas.)
                 mask_loss_cropped = crop_mask(mask_loss_unweighted, pos_gt_bboxes_norm)
                 loss_mask_per_instance = mask_loss_cropped.mean(dim=(1, 2))
-
-                # --- INICIO NUEVA DEPURACIÓN ---
-                if is_rank_zero:
-                    logger.info(f"[MaskLoss Debug] Suma de loss_mask_per_instance: {loss_mask_per_instance.sum().item()}")
-                # --- FIN NUEVA DEPURACIÓN ---
                 
                 if box_norm.shape[0] != loss_mask_per_instance.shape[0]:
                     logger.warning(f"Mask Box norm shape mismatch: {box_norm.shape} vs loss_mask shape: {loss_mask_per_instance.shape}. Using mean.")
