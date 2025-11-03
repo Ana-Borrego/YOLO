@@ -210,37 +210,11 @@ class YOLOSegmentationLoss:
         else:
             padded_targets = torch.empty((batch_size, 0, 5), device=device)
         
-        # --- INICIO DEBUG: Verificar padded_targets ---
-        # logger.debug("--- DEBUG: Verificando padded_targets antes del Matcher ---")
-        # logger.debug(f"batch_size={batch_size}, padded_targets.shape={padded_targets.shape}")
-        # if padded_targets.numel() > 0:
-        #     target_cls_values = padded_targets[..., 0]  # Extraer solo la columna de clase
-        #     # Filtrar el padding (-1) antes de buscar min/max
-        #     valid_cls_mask = target_cls_values != -1.0
-        #     if valid_cls_mask.any():
-        #         valid_classes = target_cls_values[valid_cls_mask]
-        #         logger.debug(f"classes min/max: {valid_classes.min().item()}/{valid_classes.max().item()}")
-        #         # Comprobar si hay clases fuera del rango esperado [0, class_num-1]
-        #         if valid_classes.min() < 0 or valid_classes.max() >= self.class_num:
-        #             logger.warning(
-        #                 f"¡¡¡ERROR!!! Clases fuera del rango [0, {self.class_num-1}] detectadas."
-        #             )
-        #     else:
-        #         logger.debug("No valid class entries in padded_targets (only padding).")
-        # else:
-        #     logger.debug("padded_targets está vacío.")
-        # logger.debug("--- FIN DEBUG ---")
-        
+        # 4. Llamar al matcher
         align_targets, valid_masks, gt_indices = self.matcher(
             padded_targets, (predicts_cls.detach(), predicts_box_xyxy.detach())
         )
-        # DEBUG: información del matcher
-        # try:
-        #     logger.debug(
-        #         f"After matcher: valid_masks.any={valid_masks.any().item()}, total_valid={valid_masks.sum().item()}, gt_indices_unique={torch.unique(gt_indices).tolist()[:10]}"
-        #     )
-        # except Exception:
-        #     logger.debug("After matcher: Could not compute debug stats for valid_masks/gt_indices")
+        
         targets_cls, targets_bbox = align_targets.split((self.class_num, 4), dim=-1)
 
         cls_norm = max(targets_cls.sum(), 1)
@@ -249,92 +223,47 @@ class YOLOSegmentationLoss:
         # 2. Calcular Pérdidas de Detección
         loss_cls = self.cls(predicts_cls, targets_cls, cls_norm)
         loss_iou = self.iou(predicts_box_xyxy, targets_bbox, valid_masks, box_norm, cls_norm)
-        # Usamos all_raw_dist concatenado para DFLoss
         loss_dfl = self.dfl(all_raw_dist, targets_bbox, valid_masks, box_norm, cls_norm)
 
         # 3. Calcular Pérdida de Máscara
         loss_mask = torch.tensor(0.0, device=device)
-        # --- INICIO DEBUG (CORREGIDO) ---
-        # Solo loggear desde el rank 0 para evitar spam en DDP
         try:
             is_rank_zero = (torch.distributed.is_initialized() and torch.distributed.get_rank() == 0) or not torch.distributed.is_initialized()
         except Exception:
             is_rank_zero = True # Asumir True si falla (ej. no DDP)
 
-        if is_rank_zero:
-            logger.info(f"[MaskLoss Debug] ¿Hay máscaras válidas? {valid_masks.any().item()}")
-        # --- FIN DEBUG ---
         if valid_masks.any():
-            
-            logger.info(f"[MaskLoss Debug] Total coincidencias válidas (valid_masks.sum): {valid_masks.sum().item()}")
-            # fin del debugg -------------------------
             mask_h, mask_w = proto.shape[-2:]
             
             pos_indices_flat = torch.where(valid_masks)
-            # Usamos all_raw_coeffs concatenado
             pos_coeffs = all_raw_coeffs[pos_indices_flat] # [N_valid, M_c]
             pos_gt_indices_flat = gt_indices[valid_masks]
 
             img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()
             
-            # --- INICIO DE LA CORRECCIÓN BINCOUNT ---
             # Asegurarse de que bincount tenga en cuenta el batch_size completo,
             # incluso si las últimas imágenes no tienen bboxes.
             counts = torch.bincount(img_indices_in_flat_targets, minlength=batch_size)
             start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(counts, dim=0)[:-1]])
-            # --- FIN DE LA CORRECCIÓN BINCOUNT ---
             
             start_indices = torch.cat([torch.tensor([0], device=device), torch.cumsum(torch.bincount(img_indices_in_flat_targets), dim=0)[:-1]])
             batch_idx_for_valid = pos_indices_flat[0]
             global_gt_indices = start_indices[batch_idx_for_valid] + pos_gt_indices_flat
 
             pos_gt_segments = [targets['segments'][idx] for idx in global_gt_indices.tolist()]
-            pos_gt_bboxes_xyxy = padded_targets[pos_indices_flat[0], pos_gt_indices_flat.long()][:, 1:]
-
-            # --- DEBUG: Comprobar si encontramos segmentos ---
-            logger.info(f"[MaskLoss Debug] ¿Se encontraron segmentos? (len(pos_gt_segments)): {len(pos_gt_segments)}")
+            pos_gt_bboxes_norm = padded_targets[pos_indices_flat[0], pos_gt_indices_flat.long()][:, 1:]
             
             if pos_gt_segments:
-                
-                # --- INICIO NUEVA DEPURACIÓN ---
-                if is_rank_zero:
-                    # Inspeccionar las entradas de polygons_to_masks
-                    logger.info(f"[MaskLoss Debug] mask_h={mask_h}, mask_w={mask_w}")
-                    try:
-                        first_seg = pos_gt_segments[0]
-                        logger.info(f"[MaskLoss Debug] Shape primer segmento: {first_seg.shape}")
-                        logger.info(f"[MaskLoss Debug] Coords min/max: {first_seg.min()}/{first_seg.max()}")
-                    except Exception as e:
-                        logger.error(f"[MaskLoss Debug] Error al inspeccionar segmento: {e}")
-                # --- FIN NUEVA DEPURACIÓN ---
                 gt_masks_tensor = polygons_to_masks(pos_gt_segments, mask_h, mask_w).to(device).float()
-                # --- INICIO NUEVA DEPURACIÓN ---
-                if is_rank_zero:
-                    # ¡¡Esta es la línea clave!! ¿Están las máscaras GT vacías?
-                    logger.info(f"[MaskLoss Debug] Suma de gt_masks_tensor: {gt_masks_tensor.sum().item()}")
-                # --- FIN NUEVA DEPURACIÓN ---
 
                 pos_proto = proto[batch_idx_for_valid]
                 pos_proto_flat = pos_proto.view(pos_proto.shape[0], pos_proto.shape[1], -1)
                 pred_masks_logits = torch.bmm(pos_coeffs.unsqueeze(1), pos_proto_flat).squeeze(1).view(-1, mask_h, mask_w)
                 
-                # --- INICIO NUEVA DEPURACIÓN ---
-                if is_rank_zero:
-                    logger.info(f"[MaskLoss Debug] Logits (predicciones) min/max: {pred_masks_logits.min().item()}/{pred_masks_logits.max().item()}")
-                # --- FIN NUEVA DEPURACIÓN ---
                 mask_loss_unweighted = self.bce_mask(pred_masks_logits, gt_masks_tensor)
-                
-                # Normalizar bboxes GT a tamaño de imagen (no tamaño de máscara)
-                # self.vec2box.image_size es [W, H], necesitamos [W, H, W, H]
-                # Da error de tipo self.vec2box.image_size es un ListConfig -- debe ser una lista. 
-                # image_size_list = self.vec2box.image_size.to_list()
-                image_size_list = list(self.vec2box.image_size)
-                image_size_tensor = torch.tensor(image_size_list * 2, device=device)
-                pos_gt_bboxes_norm_img = pos_gt_bboxes_xyxy / image_size_tensor
 
-                # Recortar (crop_mask espera bboxes normalizadas a [0, 1])
-                mask_loss_cropped = crop_mask(mask_loss_unweighted, pos_gt_bboxes_norm_img)
-
+                # Recortar (crop_mask espera bboxes normalizadas a [0, 1] -- ya las tenemos normalizadas.)
+                mask_loss_cropped = crop_mask(mask_loss_unweighted, pos_gt_bboxes_norm)
                 loss_mask_per_instance = mask_loss_cropped.mean(dim=(1, 2))
 
                 # --- INICIO NUEVA DEPURACIÓN ---
@@ -351,7 +280,7 @@ class YOLOSegmentationLoss:
                 # --- DEBUG: Loggear la pérdida calculada ---
                 logger.info(f"[MaskLoss Debug] Valor de loss_mask calculado: {loss_mask.item()}")
                 # --- FIN DEBUG ---
-
+                
         return loss_iou, loss_dfl, loss_cls, loss_mask
 
 class DualLoss:
