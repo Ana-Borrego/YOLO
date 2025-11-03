@@ -15,6 +15,7 @@ from yolo.utils.bounding_box_utils import create_converter, to_metrics_format
 from yolo.utils.model_utils import PostProcess, create_optimizer, create_scheduler
 from yolo.tools.loss_functions import polygons_to_masks
 from yolo.utils.solver_utils import make_ap_table
+import numpy as np
 
 
 class BaseModel(LightningModule):
@@ -69,24 +70,14 @@ class ValidateModel(BaseModel):
         H, W = images.shape[2:]
         batch_size = images.shape[0]
         
-        # Añadir logging detallado
-        logger.debug(f"Validation batch {batch_idx}: images.shape={images.shape}, targets keys={list(targets.keys()) if isinstance(targets, dict) else 'not dict'}")
-        
         # Obtener y analizar la salida del modelo
         model_output = self.ema(images)
-        logger.debug(f"Model output type: {type(model_output)}")
-        if isinstance(model_output, dict):
-            logger.debug(f"Model output keys: {model_output.keys()}")
         
         # Post-proceso y métricas
         try:
             # 'predicts' es una Lista de DICTS (uno por imagen)
             # Cada dict tiene {'boxes', 'labels', 'scores', 'masks'}
             predicts = self.post_process(model_output, image_size=[W, H])
-            logger.debug(f"Post-process output type: {type(predicts)}")
-            logger.debug(f"Number of predictions: {len(predicts)}")
-            if len(predicts) > 0:
-                logger.debug(f"First prediction keys: {predicts[0].keys() if isinstance(predicts[0], dict) else 'not dict'}")
             
             # --- PREPARAR PREDICCIONES (metrics_pred) ---
             # to_metrics_format maneja el diccionario de predicción
@@ -134,8 +125,6 @@ class ValidateModel(BaseModel):
                 }
                 metrics_target.append(target_dict)
             
-            logger.debug(f"Metrics format - predictions: {len(metrics_pred)}, targets: {len(metrics_target)}")
-            
             mAP = self.metric(metrics_pred, metrics_target)
             return predicts, mAP
             
@@ -166,7 +155,8 @@ class ValidateModel(BaseModel):
         ]
         
         # Crear e imprimir la tabla
-        ap_table, _ = make_ap_table(score, max_result=torch.zeros(12), epoch=self.current_epoch)
+        max_result = np.zeros(12)
+        ap_table, _ = make_ap_table(score, max_result=max_result, epoch=self.current_epoch)
         logger.info(f"Resultados de Validación Época {self.current_epoch}:\n{ap_table}")
         
         del epoch_metrics["classes"]
@@ -207,40 +197,6 @@ class TrainModel(ValidateModel):
         batch_size = images.shape[0]
         # targets es un dict {'bboxes': [N, 6], 'segments': [N]}
         predicts = self(images) # Salida del modelo (diccionario)
-        
-        # DEBUG: Inspeccionar salida del modelo ---
-        # if batch_idx == 0: 
-        #     print("\n--- DEBUG: Salida del Modelo (predicts) ---")
-            
-        #     # Función de ayuda recursiva para imprimir formas
-        #     def print_nested_shapes(item, indent=""):
-        #         """Función recursiva para imprimir formas de tensores anidados."""
-        #         if isinstance(item, torch.Tensor):
-        #             print(f"{indent}Tensor{item.shape}")
-        #         elif isinstance(item, (list, tuple)):
-        #             if not item:
-        #                 print(f"{indent}Empty List/Tuple []")
-        #                 return 
-        #             print(f"{indent}{type(item).__name__} con {len(item)} elementos:")
-        #             for i, sub_item in enumerate(item):
-        #                 print(f"{indent}  Item {i}:")
-        #                 print_nested_shapes(sub_item, indent + "    ")
-        #         elif isinstance(item, dict):
-        #             if not item:
-        #                 print(f"{indent}Empty Dict {{}}")
-        #                 return 
-        #             print(f"{indent}Dict con {len(item.keys())} claves:")
-        #             for key, value in item.items():
-        #                 print(f"{indent}  Clave '{key}':")
-        #                 print_nested_shapes(value, indent + "    ")
-        #         else:
-        #             print(f"{indent}Tipo: {type(item)}")
-
-        #     # Imprimir la estructura de 'predicts'
-        #     print_nested_shapes(predicts, indent="  ")
-            
-        #     print("--- FIN DEBUG ---")
-        # ---------------------------------------------------------
         
         # Extracción de salidas y llamada a loss_fn ---
         try:
@@ -289,10 +245,7 @@ class TrainModel(ValidateModel):
             # breakpoint()
             raise
         
-        # Show loss functions values
-        logger.info(f"Batch {batch_idx} | Losses: {loss_item}")
-        
-        # Logging (sin cambios)
+        # log_dict de pérdidas.
         self.log_dict(
             loss_item,
             prog_bar=True,
