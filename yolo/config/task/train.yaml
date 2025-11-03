@@ -9,7 +9,7 @@ trainer:
   _target_: lightning.pytorch.Trainer
   strategy:
     _target_: lightning.pytorch.strategies.DDPStrategy
-    find_unused_parameters: true
+    find_unused_parameters: false
 
 data:
   batch_size: 4
@@ -20,19 +20,19 @@ data:
   data_augment: {}
 
 optimizer:
-  type: SGD
+  type: AdamW
   args:
     lr: 0.01
     weight_decay: 0.0005
-    momentum: 0.937
-    nesterov: true
+    # momentum: 0.937
+    # nesterov: true
 
 loss:
   objective:
+    BoxLoss: 7.0
     BCELoss: 0.5
-    BoxLoss: 7.5
     DFLoss: 1.5
-    MaskLoss: 7.5
+    MaskLoss: 1000
   aux:
     0.25
   matcher:
