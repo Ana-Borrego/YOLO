@@ -189,9 +189,11 @@ class YOLOSegmentationLoss:
         for (_, raw_dist, _) in detect_raw_list: # Extraer el raw_dist de la lista
             # raw_dist [B, 4*reg, H, W] -> [B, H*W, 4*reg]
             all_raw_dist.append(raw_dist.reshape(batch_size, 4 * self.reg_max, -1).permute(0, 2, 1)) # USAR RESHAPE
+        
         all_raw_dist = torch.cat(all_raw_dist, dim=1) # [B, A_total, 4*reg_max]
         target_bboxes_flat = targets['bboxes'].to(device)
         target_list = []
+        
         max_targets_in_batch = 0
         for i in range(batch_size):
             batch_mask = (target_bboxes_flat[:, 0] == i)
@@ -229,7 +231,6 @@ class YOLOSegmentationLoss:
         #     logger.debug("padded_targets está vacío.")
         # logger.debug("--- FIN DEBUG ---")
         
-        # FALLO AL LLAMAR AL MATCHER SI HAY CLASES INVÁLIDAS.
         align_targets, valid_masks, gt_indices = self.matcher(
             padded_targets, (predicts_cls.detach(), predicts_box_xyxy.detach())
         )
@@ -306,7 +307,7 @@ class YOLOSegmentationLoss:
                     except Exception as e:
                         logger.error(f"[MaskLoss Debug] Error al inspeccionar segmento: {e}")
                 # --- FIN NUEVA DEPURACIÓN ---
-                
+                gt_masks_tensor = polygons_to_masks(pos_gt_segments, mask_h, mask_w).to(device).float()
                 # --- INICIO NUEVA DEPURACIÓN ---
                 if is_rank_zero:
                     # ¡¡Esta es la línea clave!! ¿Están las máscaras GT vacías?
