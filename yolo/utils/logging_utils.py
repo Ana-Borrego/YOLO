@@ -404,7 +404,6 @@ def setup(cfg: Config):
 
     # progress.append(YOLORichProgressBar())
     progress.append(YOLORichModelSummary())
-    progress.append(ImageLogger())
     if cfg.use_tensorboard:
         loggers.append(TensorBoardLogger(log_graph="all", save_dir=save_path))
     if cfg.use_wandb:
