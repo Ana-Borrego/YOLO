@@ -220,12 +220,12 @@ class YOLOSegmentationLoss:
         cls_norm = max(targets_cls.sum(), 1)
         box_norm = targets_cls.sum(-1)[valid_masks]
 
-        # 2. Calcular Pérdidas de Detección
+        # A: Calcular Pérdidas de Detección
         loss_cls = self.cls(predicts_cls, targets_cls, cls_norm)
         loss_iou = self.iou(predicts_box_xyxy, targets_bbox, valid_masks, box_norm, cls_norm)
         loss_dfl = self.dfl(all_raw_dist, targets_bbox, valid_masks, box_norm, cls_norm)
 
-        # 3. Calcular Pérdida de Máscara
+        # B:  Calcular Pérdida de Máscara
         loss_mask = torch.tensor(0.0, device=device)
         try:
             is_rank_zero = (torch.distributed.is_initialized() and torch.distributed.get_rank() == 0) or not torch.distributed.is_initialized()
@@ -262,6 +262,20 @@ class YOLOSegmentationLoss:
                 
                 mask_loss_unweighted = self.bce_mask(pred_masks_logits, gt_masks_tensor)
 
+                # DEBUGG # ---------------------------
+                if is_rank_zero:
+                    # 1. ¿Tiene pérdida la máscara sin recortar?
+                    logger.info(f"[MaskLoss Debug] Suma de mask_loss_unweighted (ANTES de crop): {mask_loss_unweighted.sum().item()}")
+                    
+                    # 2. ¿Son válidas las bboxes para el crop?
+                    # Comprobar si hay bboxes con área 0 o negativa (x2 <= x1)
+                    widths = pos_gt_bboxes_norm[:, 2] - pos_gt_bboxes_norm[:, 0]
+                    heights = pos_gt_bboxes_norm[:, 3] - pos_gt_bboxes_norm[:, 1]
+                    invalid_boxes = (widths <= 0) | (heights <= 0)
+                    logger.info(f"[MaskLoss Debug] BBoxes (norm 0-1) stats min/max: {pos_gt_bboxes_norm.min().item()}/{pos_gt_bboxes_norm.max().item()}")
+                    logger.info(f"[MaskLoss Debug] ¿Cuántas bboxes inválidas (área<=0)?: {invalid_boxes.sum().item()} / {pos_gt_bboxes_norm.shape[0]}")
+                # --- FIN ---
+                
                 # Recortar (crop_mask espera bboxes normalizadas a [0, 1] -- ya las tenemos normalizadas.)
                 mask_loss_cropped = crop_mask(mask_loss_unweighted, pos_gt_bboxes_norm)
                 loss_mask_per_instance = mask_loss_cropped.mean(dim=(1, 2))
@@ -280,7 +294,7 @@ class YOLOSegmentationLoss:
                 # --- DEBUG: Loggear la pérdida calculada ---
                 logger.info(f"[MaskLoss Debug] Valor de loss_mask calculado: {loss_mask.item()}")
                 # --- FIN DEBUG ---
-                
+
         return loss_iou, loss_dfl, loss_cls, loss_mask
 
 class DualLoss:
