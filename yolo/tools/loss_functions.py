@@ -271,10 +271,6 @@ class YOLOSegmentationLoss:
                     loss_mask = loss_mask_per_instance.mean()
                 else:
                     loss_mask = (loss_mask_per_instance * box_norm).sum() / cls_norm
-                
-                # --- DEBUG: Loggear la pérdida calculada ---
-                logger.info(f"[MaskLoss Debug] Valor de loss_mask calculado: {loss_mask.item()}")
-                # --- FIN DEBUG ---
 
         return loss_iou, loss_dfl, loss_cls, loss_mask
 

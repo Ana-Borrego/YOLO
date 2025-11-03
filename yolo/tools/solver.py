@@ -14,7 +14,7 @@ from yolo.tools.loss_functions import create_loss_function
 from yolo.utils.bounding_box_utils import create_converter, to_metrics_format
 from yolo.utils.model_utils import PostProcess, create_optimizer, create_scheduler
 from yolo.tools.loss_functions import polygons_to_masks
-import numpy as np
+from yolo.utils.solver_utils import make_ap_table
 
 
 class BaseModel(LightningModule):
@@ -91,8 +91,6 @@ class ValidateModel(BaseModel):
             # --- PREPARAR PREDICCIONES (metrics_pred) ---
             # to_metrics_format maneja el diccionario de predicción
             metrics_pred = [to_metrics_format(predict) for predict in predicts]
-
-            # --- INICIO DE LA CORRECCIÓN MÁSCARAS GT ---
             
             # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': [N_total_segments]}
             target_bboxes_flat = targets['bboxes'].to(self.device)
@@ -136,8 +134,6 @@ class ValidateModel(BaseModel):
                 }
                 metrics_target.append(target_dict)
             
-            # --- FIN DE LA CORRECCIÓN ---
-
             logger.debug(f"Metrics format - predictions: {len(metrics_pred)}, targets: {len(metrics_target)}")
             
             mAP = self.metric(metrics_pred, metrics_target)
@@ -153,6 +149,26 @@ class ValidateModel(BaseModel):
 
     def on_validation_epoch_end(self):
         epoch_metrics = self.metric.compute()
+        
+        score = [
+            epoch_metrics.get('map', 0.0),
+            epoch_metrics.get('map_50', 0.0),
+            epoch_metrics.get('map_75', 0.0),
+            epoch_metrics.get('map_small', 0.0),
+            epoch_metrics.get('map_medium', 0.0),
+            epoch_metrics.get('map_large', 0.0),
+            epoch_metrics.get('mar_1', 0.0),
+            epoch_metrics.get('mar_10', 0.0),
+            epoch_metrics.get('mar_100', 0.0),
+            epoch_metrics.get('mar_small', 0.0),
+            epoch_metrics.get('mar_medium', 0.0),
+            epoch_metrics.get('mar_large', 0.0),
+        ]
+        
+        # Crear e imprimir la tabla
+        ap_table, _ = make_ap_table(score, max_result=torch.zeros(12), epoch=self.current_epoch)
+        logger.info(f"Resultados de Validación Época {self.current_epoch}:\n{ap_table}")
+        
         del epoch_metrics["classes"]
         self.log_dict(epoch_metrics, prog_bar=True, sync_dist=True, rank_zero_only=True)
         self.log_dict(
