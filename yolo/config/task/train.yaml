@@ -3,7 +3,7 @@ task: train
 defaults:
   - validation: ../validation
 
-epoch: 1
+epoch: 4
 
 trainer:
   _target_: lightning.pytorch.Trainer
