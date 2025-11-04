@@ -1,33 +1,22 @@
-Paso 1: Modificar la Carga de Datos (data_loader.py): Asegurar que los polígonos ground truth se carguen, procesen y se incluyan en el lote (batch) junto con las bounding boxes.
+Paso 1: Carga de Datos ✅
+Estado: Completado y funcionando
 
-	Análisis del paso 1: 
-
-		dataset_utils.py: La función scale_segmentation procesa correctamente las anotaciones de segmentación (polígonos) de los archivos de etiquetas.
-
-		data_loader.py:
-		YoloDataset.load_valid_labels: Carga explícitamente tanto las bboxes como los segments (polígonos).
-		YoloDataset.filter_data: Almacena los segmentos en self.segments.
-		YoloDataset.get_data: Recupera la lista de segmentos.
-		YoloDataset.__getitem__: Pasa los segmentos al pipeline de transform.
-
-		data_augmentation.py:
-		AugmentationComposer: Acepta y pasa segments a todas las transformaciones.
-		PadAndResize, HorizontalFlip, VerticalFlip, y MixUp: Todas estas clases han sido actualizadas para aceptar y transformar correctamente la lista de segmentos (polígonos) junto con las imágenes y las bboxes.
-		collate_fn (en data_loader.py): Este es el punto clave. La función collate_fn empaqueta correctamente los datos en el formato conceptual que discutimos:
-			Concatena todas las bboxes del lote en un solo tensor [N, 6].
-			Agrega todos los segments (polígonos) del lote en una sola lista batch_segments_list.
-			Devuelve un diccionario targets = {"bboxes": cat_bboxes, "segments": batch_segments_list}.
-		Conclusión del Paso 1: Los scripts de datos están listos y no requieren modificaciones. El collate_fn  entregará la estructura de datos que necesita el training_step
+Pipeline de datos preparado:
+- dataset_utils.py: scale_segmentation procesa los polígonos
+- data_loader.py: load_valid_labels + filter_data + get_data + __getitem__ manejan los segmentos
+- data_augmentation.py: todas las transformaciones soportan segmentos
+- collate_fn: empaqueta en targets = {"bboxes": [N,6], "segments": List[poly]}
 
 -----------------------
 
-Paso 2: Modificar el Matcher (bounding_box_utils.py): Ajustar BoxMatcher.__call__ para que devuelva los índices de los GT emparejados, necesarios para alinear las máscaras en la pérdida.
+Paso 2: Matcher (BoxMatcher) ✅
+------------------------
+Estado: Completado y funcionando
 
-	El método BoxMatcher.__call__ en tu archivo ya ha sido modificado exactamente como lo describimos:
-	La firma de la función ya especifica que devuelve tres tensores: def __call__(self, target: Tensor, predict: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
-	El final de la función ya calcula el gt_indices_output (usando torch.where para poner -1 en los inválidos).
-	La sentencia return final ya devuelve los tres elementos: return anchor_matched_targets, valid_mask, gt_indices_output
-	Conclusión del Paso 2: No se requieren modificaciones de código en bounding_box_utils.py. Podemos pasar directamente al siguiente paso.
+BoxMatcher.__call__:
+- Input: (target: Tensor, predict: Tuple[Tensor, Tensor])
+- Output: (anchor_matched_targets, valid_mask, gt_indices_output)
+- Funcionalidad: Asigna anchors a targets y devuelve índices para alinear máscaras
 
 Paso 3: Modificar la Función de Pérdida (loss_functions.py): Revisar YOLOSegmentationLoss y DualLoss para asegurar que acepten correctamente las salidas del modelo (detección, coeficientes, prototipos) y los targets (bboxes, segmentos) y calculen la pérdida de máscara.
 
@@ -352,6 +341,7 @@ DEBUGGEAR EL OPTIMIZADOR. Estado:
 	Si los gradientes son 0 o ausentes, nos enfocamos en matcher/loss o en parámetros congelados.
 ]]
 
+SE HA RESTAURADO LA FUNCIÓN INICIAL QUE CREABA EL OPTIMIZADOR. AJUSTANDO EL CÓDIGO A ELLA.
 
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Posibles causas principales del mAP=0 (prioridad por probabilidad):

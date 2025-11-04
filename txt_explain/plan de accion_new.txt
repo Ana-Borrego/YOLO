@@ -1,0 +1,66 @@
+RESUMEN EJECUTIVO DEL PROYECTO
+=============================
+[Este es un documento de resumen. Para detalles completos del proceso y replicabilidad, 
+consultar plan de accion.txt]
+
+ESTADO ACTUAL DEL PROYECTO
+-------------------------
+
+✅ COMPLETADO:
+-------------
+1. Pipeline de datos
+   - Carga correcta de polígonos y bboxes
+   - Data augmentation funcionando
+   - Collate_fn generando estructura correcta
+
+2. Estructura del modelo y entrenamiento
+   - Matcher funcionando correctamente con asignación de anchors a targets (676 asignaciones válidas)
+   - Función de pérdida procesando detección y segmentación
+   - Training loop y desempaquetado de predicciones operativo
+
+3. Validación y Post-proceso
+   - PostProcess reconstruye máscaras correctamente
+   - Bucle de validación preparando targets GT para métricas
+
+🔄 EN PROGRESO:
+--------------
+1. Problema de Aprendizaje
+   - Síntoma: El modelo no está actualizando pesos efectivamente
+   - Evidencia del último log:
+     * Los gradientes comienzan infinitos/nan y se estabilizan
+     * Las pérdidas muestran cierta reducción pero pueden mejorar
+     * Learning rate inicia en 0.007 (comportamiento esperado del warmup)
+
+2. Problemas en Validación
+   - Scores muy bajos en predicciones (max ≈ 0.01–0.05)
+   - Demasiadas predicciones por imagen (>100 boxes)
+   - Posible problema de escalado en las predicciones
+
+📋 PRÓXIMOS PASOS:
+-----------------
+1. Analizar Post-proceso
+   - Revisar umbral de confianza en NMS
+   - Verificar escalado de coordenadas
+   - Confirmar formato correcto de máscaras
+
+2. Debug de Validación
+   - Verificar scores antes y después de NMS
+   - Comprobar escalado de image_size
+   - Validar formato de targets para métricas
+
+3. Optimización del Entrenamiento
+   - Monitorear gradientes y pérdidas
+   - Ajustar hiperparámetros si es necesario
+   - Verificar warmup del optimizador
+
+MÉTRICAS A MONITOREAR:
+---------------------
+1. Entrenamiento:
+   - Gradientes: max_grad y mean_grad
+   - Pérdidas: BoxLoss, DFLLoss, BCELoss, MaskLoss
+   - Learning rate durante warmup
+
+2. Validación:
+   - Scores de predicciones (min/max)
+   - Número de boxes por imagen
+   - mAP para detección y segmentación

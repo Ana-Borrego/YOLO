@@ -10,6 +10,7 @@ trainer:
   strategy:
     _target_: lightning.pytorch.strategies.DDPStrategy
     find_unused_parameters: false
+  gradient_clip_val: 1.0  # Limitar gradientes para prevenir explosión
 
 data:
   batch_size: 4
@@ -22,7 +23,7 @@ data:
 optimizer:
   type: AdamW
   args:
-    lr: 0.01
+    lr: 0.0001
     weight_decay: 0.0005
     # momentum: 0.937
     # nesterov: true
@@ -32,7 +33,7 @@ loss:
     BoxLoss: 7.0
     BCELoss: 0.5
     DFLoss: 1.5
-    MaskLoss: 1000
+    MaskLoss: 1.0  # Reducido para balancear con otras pérdidas
   aux:
     0.25
   matcher:
