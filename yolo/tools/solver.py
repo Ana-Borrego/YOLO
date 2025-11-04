@@ -74,17 +74,40 @@ class ValidateModel(BaseModel):
         # Obtener y analizar la salida del modelo
         model_output = self.ema(images)
         
+        # Debug: Analizar la salida del modelo antes del post-proceso
+        logger.info("=== DEBUG: Model Output Structure ===")
+        for key, value in model_output.items():
+            if isinstance(value, (tuple, list)):
+                logger.info(f"{key}: {[v.shape if torch.is_tensor(v) else type(v) for v in value]}")
+            else:
+                logger.info(f"{key}: {value.shape if torch.is_tensor(value) else type(value)}")
+            
         # Post-proceso y métricas
         try:
             # 'predicts' es una Lista de DICTS (uno por imagen)
             # Cada dict tiene {'boxes', 'labels', 'scores', 'masks'}
             predicts = self.post_process(model_output, image_size=[W, H])
-            
+                
+            # Debug: Inspeccionar las predicciones después del post-proceso
+            logger.info("\n=== DEBUG: Post-Process Output ===")
+            for i, pred in enumerate(predicts):
+                logger.info(f"\nImagen {i}:")
+                logger.info(f"- Boxes shape: {pred['boxes'].shape if 'boxes' in pred else 'No boxes'}")
+                logger.info(f"- Labels shape: {pred['labels'].shape if 'labels' in pred else 'No labels'}")
+                logger.info(f"- Scores: min={pred['scores'].min().item():.4f}, max={pred['scores'].max().item():.4f}" if 'scores' in pred else 'No scores')
+                if 'masks' in pred:
+                    if isinstance(pred['masks'], torch.Tensor):
+                        logger.info(f"- Masks: tensor shape {pred['masks'].shape}")
+                    elif isinstance(pred['masks'], list):
+                        logger.info(f"- Masks: list of {len(pred['masks'])} polígonos")
+                        if len(pred['masks']) > 0:
+                            logger.info(f"  - Ejemplo polígono shape: {pred['masks'][0].shape if isinstance(pred['masks'][0], np.ndarray) else type(pred['masks'][0])}")
+                else:
+                    logger.info("- No masks found")
+                
             # --- PREPARAR PREDICCIONES (metrics_pred) ---
             # to_metrics_format maneja el diccionario de predicción
-            metrics_pred = [to_metrics_format(predict) for predict in predicts]
-            
-            # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': [N_total_segments]}
+            metrics_pred = [to_metrics_format(predict) for predict in predicts]            # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': [N_total_segments]}
             target_bboxes_flat = targets['bboxes'].to(self.device)
             target_segments_list = targets['segments'] # Lista de arrays np (en CPU)
             
