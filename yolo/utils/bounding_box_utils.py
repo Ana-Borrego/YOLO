@@ -682,26 +682,49 @@ def calculate_map(predictions, ground_truths) -> Dict[str, Tensor]:
 
 
 def to_metrics_format(prediction: Union[Tensor, Dict[str, Tensor]]):
+    """Convierte las predicciones al formato requerido por torchmetrics.detection.MeanAveragePrecision"""
     
-    # --- INICIO DE LA MODIFICACIÓN ---
-    # Manejar el formato antiguo (solo tensor) Y el nuevo (dict)
     if isinstance(prediction, torch.Tensor):
-        # Formato antiguo (Tensor [N, 6] o [N, 5])
-        # Asegurarse de que no filtramos si es un target (sin padding -1)
-        if (prediction.numel() > 0 and prediction[0, 0] != -1):
+        # Formato antiguo (Tensor)
+        if prediction.numel() > 0 and prediction[0, 0] != -1:
             prediction = prediction[prediction[:, 0] != -1]
         
-        bbox = {"boxes": prediction[:, 1:5], "labels": prediction[:, 0].int()}
-        if prediction.size(1) == 6:
-            bbox["scores"] = prediction[:, 5]
-        return bbox
+        # Asegurar que las cajas estén en el rango correcto (0-1)
+        boxes = prediction[:, 1:5]
+        boxes = torch.clamp(boxes, 0, 1)  # Asegurar rango válido
+        
+        scores = prediction[:, 5] if prediction.size(1) == 6 else torch.ones(prediction.size(0), device=prediction.device)
+        labels = prediction[:, 0].int()
+        
+        # Filtrar por score
+        mask = scores > 0.05  # Un umbral mínimo para considerar predicciones válidas
+        boxes = boxes[mask]
+        labels = labels[mask]
+        scores = scores[mask]
+        
+        return {
+            "boxes": boxes,
+            "labels": labels,
+            "scores": scores
+        }
     
     elif isinstance(prediction, dict):
-        # Nuevo formato (Dict)
-        # No es necesario filtrar por -1, PostProcess ya lo ha hecho
-        # El diccionario ya tiene las claves correctas: 'boxes', 'labels', 'scores', 'masks'
+        # Formato nuevo (Dict)
+        # Asegurar que las cajas estén en el rango correcto
+        boxes = torch.clamp(prediction['boxes'], 0, 1)
+        prediction['boxes'] = boxes
+        
+        # Filtrar por score si existe
+        if 'scores' in prediction:
+            mask = prediction['scores'] > 0.05
+            prediction['boxes'] = boxes[mask]
+            prediction['labels'] = prediction['labels'][mask]
+            prediction['scores'] = prediction['scores'][mask]
+            
+            if 'masks' in prediction:
+                prediction['masks'] = prediction['masks'][mask].bool()
+        
         return prediction
     
     else:
         raise TypeError(f"Formato de predicción no reconocido: {type(prediction)}")
-    # --- FIN DE LA MODIFICACIÓN ---

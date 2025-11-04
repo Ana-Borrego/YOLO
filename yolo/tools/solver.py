@@ -36,8 +36,8 @@ class ValidateModel(BaseModel):
             self.validation_cfg = self.cfg.task
         else:
             self.validation_cfg = self.cfg.task.validation # type: ignore
-        # self.metric = MeanAveragePrecision(iou_type="bbox", box_format="xyxy", backend="faster_coco_eval")
-        # self.metric.warn_on_many_detections = False
+        self.metric = MeanAveragePrecision(iou_type="bbox", box_format="xyxy", backend="faster_coco_eval")
+        self.metric.warn_on_many_detections = False
         
         self.val_loader = create_dataloader(self.validation_cfg.data, self.cfg.dataset, self.validation_cfg.task)
         
@@ -84,6 +84,13 @@ class ValidateModel(BaseModel):
             # Preparar targets para métricas
             target_bboxes_flat = targets['bboxes'].to(self.device)
             target_segments_list = targets['segments']
+            
+            # Debug de rangos de coordenadas
+            if batch_idx == 0:  # Solo para el primer batch
+                for i, pred in enumerate(metrics_pred):
+                    if pred['boxes'].numel() > 0:
+                        logger.info(f"PRED boxes range: min={pred['boxes'].min().item():.3f}, max={pred['boxes'].max().item():.3f}")
+                        logger.info(f"PRED scores range: min={pred['scores'].min().item():.3f}, max={pred['scores'].max().item():.3f}")
             
             # Obtener índices de inicio para segmentos
             img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()

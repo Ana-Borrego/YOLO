@@ -345,10 +345,17 @@ class PostProcess:
 
             # Seleccionar las predicciones finales
             final_boxes = boxes_pre_nms[nms_idx]   # [N_final, 4]
-            # Normalizar las cajas al rango 0-1 ---PROBLEMA: MÉTRICAS NO CALCULADAS
+            
+            # Normalizar las cajas al rango 0-1 para coincidir con los targets
             final_boxes = final_boxes / torch.tensor([W_img, H_img, W_img, H_img], device=final_boxes.device)
-            final_scores = scores_pre_nms[nms_idx]  # [N_final]
-            final_labels = labels_pre_nms[nms_idx]  # [N_final]
+            final_scores = scores_pre_nms[nms_idx]   # [N_final]
+            final_labels = labels_pre_nms[nms_idx]   # [N_final]
+            
+            # Filtrar predicciones por score para métricas - después de normalizar
+            score_mask = final_scores > 0.05  # Umbral más estricto para métricas
+            final_boxes = final_boxes[score_mask]
+            final_scores = final_scores[score_mask]
+            final_labels = final_labels[score_mask]
 
             # --- 4c. Reconstruir Máscaras (si aplica) ---
             final_masks = torch.empty(0, device=preds_cls.device) # Placeholder
