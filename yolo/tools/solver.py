@@ -94,7 +94,10 @@ class ValidateModel(BaseModel):
                 logger.info(f"\nImagen {i}:")
                 logger.info(f"- Boxes shape: {pred['boxes'].shape if 'boxes' in pred else 'No boxes'}")
                 logger.info(f"- Labels shape: {pred['labels'].shape if 'labels' in pred else 'No labels'}")
-                logger.info(f"- Scores: min={pred['scores'].min().item():.4f}, max={pred['scores'].max().item():.4f}" if 'scores' in pred else 'No scores')
+                if 'scores' in pred and pred['scores'].numel() > 0:
+                    logger.info(f"- Scores: min={pred['scores'].min().item():.4f}, max={pred['scores'].max().item():.4f}")
+                else:
+                    logger.info("- Scores: No detections passed confidence threshold")
                 if 'masks' in pred:
                     if isinstance(pred['masks'], torch.Tensor):
                         logger.info(f"- Masks: tensor shape {pred['masks'].shape}")
