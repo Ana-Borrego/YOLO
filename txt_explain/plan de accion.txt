@@ -246,6 +246,50 @@ Bucle de Entrenamiento (Paso 4): ✅ Desempaquetando correctamente las salidas d
 Post-Proceso (Paso 6): ✅ PostProcess reconstruye las máscaras para la validación .
 Bucle de Validación (Paso 5): ✅ Prepara los targets de máscara GT para la métrica. No crashea.
 
+DESCRIPCIÓN DETALLADA DEL PROBLEMA ESCALADO DE PREDICCIONES Y GROUND TRUTH:
+	Se ha identificado una inconsistencia crítica en la normalización de las cajas delimitadoras (bounding boxes) a lo largo del pipeline:
+
+	1. Estado Actual de las Normalizaciones:
+	   - Dataset (data_loader.py):
+		 * Los labels (bboxes y segments) se cargan normalizados (0-1)
+		 * load_valid_labels() verifica y clipea los puntos al rango 0-1
+	   - Post-Procesamiento (model_utils.py):
+		 * Las predicciones del modelo están en coordenadas absolutas (píxeles)
+		 * Solo se normalizan temporalmente para el crop de máscaras
+	   - Métricas (solver.py):
+		 * Los targets mantienen su normalización original (0-1)
+		 * Las predicciones llegan sin normalizar (0-640)
+
+	2. Impacto del Problema:
+	   - Cálculo incorrecto de pérdidas debido a escalas incompatibles
+	   - Métricas de evaluación potencialmente inexactas
+	   - Dificultad para comparar predicciones con ground truth
+	   - Debug logs muestran predicciones fuera de rango (-99 a 694)
+
+	3. Soluciones Propuestas:
+
+	   a) Solución en validation_step:
+		  - Normalizar predicciones justo antes de calcular métricas
+		  - Ventaja: No afecta a otros componentes
+		  - Desventaja: La normalización ocurre tarde en el pipeline
+
+	   b) Solución en PostProcess (IMPLEMENTADA):
+		  - Normalizar cajas después del NMS
+		  - Ventaja: Predicciones consistentes en todo el pipeline
+		  - Ventaja: Más limpio y centralizado
+		  - Código más mantenible
+
+	   c) Solución Alternativa (Futura):
+		  - Revisar y unificar todas las normalizaciones
+		  - Documentar claramente el formato esperado en cada etapa
+		  - Añadir validaciones de rango en puntos críticos
+
+	4. Próximos Pasos:
+	   - Monitorizar el impacto en el entrenamiento
+	   - Verificar la mejora en las métricas
+	   - Considerar implementar la solución completa (c) en futuras iteraciones
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 PROBLEMA ACTUAL DE MÁXIMA PRIORIDAD: El modelo no aprende entre épocas, parece que hay un conflicto porque se ha realizado la modificación de que trabaje con máscaras de manera que
 									 sólo funciona con el optimizador SGD. Queremos que el código sea capaz de trabajar con cualquier optimizador (dando prioridad a AdamW). 
@@ -300,6 +344,8 @@ Diagnóstico Completo:
 		
 SE HAN REALIZADO LAS MODIFICACIONES EN LOS SCRIPTS models_utils.py Y solver.py PARA ELIMINAR EL HARDCODEO. EL OUTPUT OBTENIDO TAMPOCO MUESTRA RESULTADOS, SE PRECISA ANÁLISIS A FONDO.
 
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Posibles causas principales del mAP=0 (prioridad por probabilidad):
 	1. PostProcess está devolviendo cero predicciones (lista vacía o pred dicts con 0 cajas). Resultado: metric recibe [] y mAP=0.
 	2. Las predicciones existen pero todas tienen score muy bajo (filtradas por keep = scores > self.nms.min_confidence) o nms/max_bbox las elimina.
@@ -372,71 +418,4 @@ QUE BUSCAR EN LOS DEBUGS:
 	keep.sum() equals 0 -> min_confidence filter removed everything.
 	boxes min/max outside [0, W] / [0,H] or NaN. 
 
-Nuevo DEBUG:
-	Añadí debug en validation_step (en solver.py) que:
-		imprime sample de predicciones (primeras 3 cajas), min/max de coordenadas, min/max de scores, labels únicos y dtype/área de máscara (suma) para la primera imagen del batch,
-		imprime lo mismo para los ground-truth (targets) para la misma imagen,
-		captura excepciones para que no interrumpa la validación.
-	Los logs nuevos aparecen con la etiqueta [DEBUG_COMPARE] para localizarlos fácilmente.
-	
-Puntos importantes que pueden indicar problemas potenciales según el debugg:
 
-	1. Diferencias en las coordenadas de las cajas:
-		* Predicciones: están en un rango muy amplio (-99.88 a 694.00)
-		* Ground truth: están normalizadas (0.21 a 0.80)
-
-2. Etiquetas:
-	* Las predicciones están perdiendo algunas clases (faltan las clases 1, 16, 17, 24, 25 en las predicciones)
-	* El modelo predice ~450 objetos por imagen cuando el ground truth tiene ~30-32 objetos
-
-3. Diferencia en las máscaras:
-	* Predicciones: shape [450-466, 640, 640] con sum ~409600
-	* Ground truth: shape [30-32, 640, 640] con sum ~790-1341
-
-El problema más grave parece ser que el modelo está:
-	A. Prediciendo demasiados objetos (sobredetección) -- NO ES PRIORIDAD
-	B. Las coordenadas de las cajas no están en la misma escala que el ground truth
-	C. Las máscaras predichas están cubriendo demasiada área. 
-	
-DESCRIPCIÓN DETALLADA DEL PROBLEMA ESCALADO DE PREDICCIONES Y GROUND TRUTH:
-Se ha identificado una inconsistencia crítica en la normalización de las cajas delimitadoras (bounding boxes) a lo largo del pipeline:
-
-1. Estado Actual de las Normalizaciones:
-   - Dataset (data_loader.py):
-     * Los labels (bboxes y segments) se cargan normalizados (0-1)
-     * load_valid_labels() verifica y clipea los puntos al rango 0-1
-   - Post-Procesamiento (model_utils.py):
-     * Las predicciones del modelo están en coordenadas absolutas (píxeles)
-     * Solo se normalizan temporalmente para el crop de máscaras
-   - Métricas (solver.py):
-     * Los targets mantienen su normalización original (0-1)
-     * Las predicciones llegan sin normalizar (0-640)
-
-2. Impacto del Problema:
-   - Cálculo incorrecto de pérdidas debido a escalas incompatibles
-   - Métricas de evaluación potencialmente inexactas
-   - Dificultad para comparar predicciones con ground truth
-   - Debug logs muestran predicciones fuera de rango (-99 a 694)
-
-3. Soluciones Propuestas:
-
-   a) Solución en validation_step:
-      - Normalizar predicciones justo antes de calcular métricas
-      - Ventaja: No afecta a otros componentes
-      - Desventaja: La normalización ocurre tarde en el pipeline
-
-   b) Solución en PostProcess (IMPLEMENTADA):
-      - Normalizar cajas después del NMS
-      - Ventaja: Predicciones consistentes en todo el pipeline
-      - Ventaja: Más limpio y centralizado
-      - Código más mantenible
-
-   c) Solución Alternativa (Futura):
-      - Revisar y unificar todas las normalizaciones
-      - Documentar claramente el formato esperado en cada etapa
-      - Añadir validaciones de rango en puntos críticos
-
-4. Próximos Pasos:
-   - Monitorizar el impacto en el entrenamiento
-   - Verificar la mejora en las métricas
-   - Considerar implementar la solución completa (c) en futuras iteraciones
