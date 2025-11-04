@@ -230,6 +230,8 @@ class TrainModel(ValidateModel):
         self.cfg = cfg
         # NO hay conversión manual de self.cfg.task aquí
         self.train_loader = create_dataloader(self.cfg.task.data, self.cfg.dataset, self.cfg.task.task) # type: ignore
+        # Diagnostic flag to avoid repeating heavy logs
+        self._diagnostics_logged = False
 
     def setup(self, stage):
         super().setup(stage)
@@ -252,11 +254,16 @@ class TrainModel(ValidateModel):
             if optimizers and len(optimizers) > 0:
                 opt = optimizers[0]
                 pg = opt.param_groups[0]
-                logger.info(f"TRAIN START: Optimizer={opt.__class__.__name__}, lr={pg.get('lr')}, weight_decay={pg.get('weight_decay')}, amsgrad={pg.get('amsgrad', None)}")
+                msg = f"TRAIN START: Optimizer={opt.__class__.__name__}, lr={pg.get('lr')}, weight_decay={pg.get('weight_decay')}, amsgrad={pg.get('amsgrad', None)}"
+                logger.info(msg)
+                # Ensure visible on consoles that may not capture logger
+                print(msg)
             else:
                 logger.info("TRAIN START: No optimizer found on trainer yet.")
+                print("TRAIN START: No optimizer found on trainer yet.")
         except Exception:
             logger.exception("Error logging optimizer info on_train_start")
+            print("Error logging optimizer info on_train_start")
 
     def on_after_backward(self):
         """Light-weight gradient diagnostics after backward (diagnostic)."""
@@ -282,15 +289,35 @@ class TrainModel(ValidateModel):
                     mean_grad += mean_g
                     cnt += 1
             mean_grad = (mean_grad / cnt) if cnt > 0 else 0.0
-            logger.info(f"AFTER_BACKWARD: params_with_grad={params_with_grad}/{total_params}, max_grad={max_grad:.6g}, mean_grad={mean_grad:.6g}")
+            msg = f"AFTER_BACKWARD: params_with_grad={params_with_grad}/{total_params}, max_grad={max_grad:.6g}, mean_grad={mean_grad:.6g}"
+            logger.info(msg)
+            print(msg)
         except Exception:
             logger.exception("Error computing gradient stats in on_after_backward")
+            print("Error computing gradient stats in on_after_backward")
 
     def training_step(self, batch, batch_idx):
         # lr_dict = self.trainer.optimizers[0].next_batch() # type: ignore
         # Ahora batch = (images, targets_dict, rev_tensor, img_paths)
         images, targets, *_ = batch 
         batch_size = images.shape[0]
+        # Fallback diagnostic: log optimizer info on first batch if on_train_start didn't show up
+        if not getattr(self, '_diagnostics_logged', False):
+            try:
+                optimizers = getattr(self.trainer, 'optimizers', None)
+                if optimizers and len(optimizers) > 0:
+                    opt = optimizers[0]
+                    pg = opt.param_groups[0]
+                    msg = f"FIRST_BATCH DIAG: Optimizer={opt.__class__.__name__}, lr={pg.get('lr')}, weight_decay={pg.get('weight_decay')}"
+                    logger.info(msg)
+                    print(msg)
+                else:
+                    logger.info("FIRST_BATCH DIAG: No optimizer found on trainer yet.")
+                    print("FIRST_BATCH DIAG: No optimizer found on trainer yet.")
+            except Exception:
+                logger.exception("Error logging optimizer info in training_step first batch")
+                print("Error logging optimizer info in training_step first batch")
+            self._diagnostics_logged = True
         # targets es un dict {'bboxes': [N, 6], 'segments': [N]}
         predicts = self(images) # Salida del modelo (diccionario)
         

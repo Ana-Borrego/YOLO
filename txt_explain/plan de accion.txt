@@ -342,7 +342,15 @@ Diagnóstico Completo:
 		* El learning rate y momentum se manipulan de forma no estándar
 		* La convergencia del modelo se ve comprometida
 		
-SE HAN REALIZADO LAS MODIFICACIONES EN LOS SCRIPTS models_utils.py Y solver.py PARA ELIMINAR EL HARDCODEO. EL OUTPUT OBTENIDO TAMPOCO MUESTRA RESULTADOS, SE PRECISA ANÁLISIS A FONDO.
+SE HAN REALIZADO LAS MODIFICACIONES EN LOS SCRIPTS models_utils.py Y solver.py PARA ELIMINAR EL HARDCODEO. EL OUTPUT OBTENIDO TAMPOCO MUESTRA RESULTADOS DE ACTUALIZACIÓN, SE PRECISA ANÁLISIS A FONDO.
+
+DEBUGGEAR EL OPTIMIZADOR. Estado: 
+
+[[[Con esos logs confirmaremos si:
+	El optimizador realmente está presente y es el esperado (AdamW, etc.).
+	Los gradientes existen y tienen magnitud razonable (=> el modelo puede actualizar pesos).
+	Si los gradientes son 0 o ausentes, nos enfocamos en matcher/loss o en parámetros congelados.
+]]
 
 
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
