@@ -148,7 +148,38 @@ class ValidateModel(BaseModel):
                     "masks": gt_masks_tensor.bool() # [M, H, W] (Bool)
                 }
                 metrics_target.append(target_dict)
-            
+            # Debug adicional: comparar predicciones vs targets para la primera imagen del batch
+            try:
+                if batch_size > 0:
+                    i = 0
+                    pred0 = predicts[i]
+                    targ0 = metrics_target[i] if i < len(metrics_target) else None
+
+                    # Predicciones
+                    if 'boxes' in pred0:
+                        b = pred0['boxes'].detach().cpu()
+                        logger.info(f"[DEBUG_COMPARE] Pred boxes sample (first 3): {b[:3]}")
+                        logger.info(f"[DEBUG_COMPARE] Pred boxes coords min: {b.min().item():.2f}, max: {b.max().item():.2f}")
+                    if 'scores' in pred0:
+                        s = pred0['scores'].detach().cpu()
+                        logger.info(f"[DEBUG_COMPARE] Pred scores min/max: {s.min().item():.6f}/{s.max().item():.6f}")
+                    if 'labels' in pred0:
+                        logger.info(f"[DEBUG_COMPARE] Pred labels unique: {pred0['labels'].detach().cpu().unique()} ")
+                    if 'masks' in pred0 and isinstance(pred0['masks'], torch.Tensor):
+                        m = pred0['masks'].detach().cpu()
+                        logger.info(f"[DEBUG_COMPARE] Pred masks dtype: {m.dtype}, shape: {m.shape}, sum example: {int(m[0].sum().item()) if m.numel()>0 else 0}")
+
+                    # Targets
+                    if targ0 is not None:
+                        tb = targ0['boxes'].detach().cpu()
+                        logger.info(f"[DEBUG_COMPARE] Target boxes sample (first 3): {tb[:3]}")
+                        logger.info(f"[DEBUG_COMPARE] Target boxes coords min: {tb.min().item() if tb.numel()>0 else 0:.2f}, max: {tb.max().item() if tb.numel()>0 else 0:.2f}")
+                        logger.info(f"[DEBUG_COMPARE] Target labels unique: {targ0['labels'].detach().cpu().unique() if targ0['labels'].numel()>0 else 'none'}")
+                        tm = targ0['masks'].detach().cpu()
+                        logger.info(f"[DEBUG_COMPARE] Target masks dtype: {tm.dtype}, shape: {tm.shape}, sum example: {int(tm[0].sum().item()) if tm.numel()>0 else 0}")
+            except Exception as _:
+                logger.exception("Error during additional validation debug compare")
+
             mAP = self.metric(metrics_pred, metrics_target)
             return predicts, mAP
             
