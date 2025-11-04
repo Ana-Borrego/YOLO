@@ -71,127 +71,51 @@ class ValidateModel(BaseModel):
         H, W = images.shape[2:]
         batch_size = images.shape[0]
         
-        # Obtener y analizar la salida del modelo
-        model_output = self.ema(images)
-        
-        # Debug: Analizar la salida del modelo antes del post-proceso
-        logger.info("=== DEBUG: Model Output Structure ===")
-        for key, value in model_output.items():
-            if isinstance(value, (tuple, list)):
-                logger.info(f"{key}: {[v.shape if torch.is_tensor(v) else type(v) for v in value]}")
-            else:
-                logger.info(f"{key}: {value.shape if torch.is_tensor(value) else type(value)}")
-            
-        # Post-proceso y métricas
         try:
-            # 'predicts' es una Lista de DICTS (uno por imagen)
-            # Cada dict tiene {'boxes', 'labels', 'scores', 'masks'}
-            predicts = self.post_process(model_output, image_size=[W, H])
-                
-            # Debug: Inspeccionar las predicciones después del post-proceso
-            logger.info("\n=== DEBUG: Post-Process Output ===")
-            for i, pred in enumerate(predicts):
-                logger.info(f"\nImagen {i}:")
-                logger.info(f"- Boxes shape: {pred['boxes'].shape if 'boxes' in pred else 'No boxes'}")
-                logger.info(f"- Labels shape: {pred['labels'].shape if 'labels' in pred else 'No labels'}")
-                if 'scores' in pred and pred['scores'].numel() > 0:
-                    logger.info(f"- Scores: min={pred['scores'].min().item():.4f}, max={pred['scores'].max().item():.4f}")
-                else:
-                    logger.info("- Scores: No detections passed confidence threshold")
-                if 'masks' in pred:
-                    if isinstance(pred['masks'], torch.Tensor):
-                        logger.info(f"- Masks: tensor shape {pred['masks'].shape}")
-                    elif isinstance(pred['masks'], list):
-                        logger.info(f"- Masks: list of {len(pred['masks'])} polígonos")
-                        if len(pred['masks']) > 0:
-                            logger.info(f"  - Ejemplo polígono shape: {pred['masks'][0].shape if isinstance(pred['masks'][0], np.ndarray) else type(pred['masks'][0])}")
-                else:
-                    logger.info("- No masks found")
-                
-            # --- PREPARAR PREDICCIONES (metrics_pred) ---
-            # to_metrics_format maneja el diccionario de predicción
-            metrics_pred = [to_metrics_format(predict) for predict in predicts]            # 'targets' es un dict {'bboxes': [N_total, 6], 'segments': [N_total_segments]}
-            target_bboxes_flat = targets['bboxes'].to(self.device)
-            target_segments_list = targets['segments'] # Lista de arrays np (en CPU)
+            # Obtener y analizar la salida del modelo
+            model_output = self.ema(images)
             
-            # Necesitamos la lógica de "start_indices" para mapear segmentos a imágenes
+            # Post-proceso para obtener predicciones
+            predicts = self.post_process(model_output, image_size=[W, H])
+            
+            # Preparar predicciones para métricas
+            metrics_pred = [to_metrics_format(predict) for predict in predicts]
+            
+            # Preparar targets para métricas
+            target_bboxes_flat = targets['bboxes'].to(self.device)
+            target_segments_list = targets['segments']
+            
+            # Obtener índices de inicio para segmentos
             img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()
-            # Bincount debe ejecutarse en CPU si el tensor es pequeño, o en el dispositivo
-            img_indices_cpu = img_indices_in_flat_targets.cpu()
-            counts = torch.bincount(img_indices_cpu, minlength=batch_size)
-            start_indices = torch.cat([
-                torch.tensor([0]), 
-                torch.cumsum(counts, dim=0)[:-1]
-            ]).tolist() # Convertir a lista de ints de Python
+            counts = torch.bincount(img_indices_in_flat_targets.cpu(), minlength=batch_size)
+            start_indices = torch.cat([torch.tensor([0]), torch.cumsum(counts, dim=0)[:-1]]).tolist()
 
+            # Construir métricas target por imagen
             metrics_target = []
             for i in range(batch_size):
                 mask = (target_bboxes_flat[:, 0] == i)
-                # bboxes_for_image es [M, 5] (class_id, x1, y1, x2, y2)
-                bboxes_for_image = target_bboxes_flat[mask][:, 1:] # En self.device
-                
+                bboxes_for_image = target_bboxes_flat[mask][:, 1:]
                 num_gts = bboxes_for_image.shape[0]
                 
-                # Obtener los segmentos para esta imagen
+                # Obtener y rasterizar segmentos
                 start_idx = start_indices[i]
                 segments_for_image = target_segments_list[start_idx : start_idx + num_gts]
+                gt_masks_tensor = polygons_to_masks(segments_for_image, H, W).to(self.device) if num_gts > 0 else torch.empty(0, H, W, device=self.device)
 
-                # Rasterizar máscaras
-                if num_gts > 0:
-                    # polygons_to_masks espera polígonos (0-1) y tamaño (H, W)
-                    # El PostProcess también genera máscaras de tamaño (H, W)
-                    gt_masks_tensor = polygons_to_masks(segments_for_image, H, W).to(self.device) # [M, H, W]
-                else:
-                    gt_masks_tensor = torch.empty(0, H, W, device=self.device)
-
-                # Construir el diccionario de target requerido por torchmetrics
+                # Construir diccionario target
                 target_dict = {
-                    "boxes": bboxes_for_image[:, 1:], # [M, 4] (xyxy)
-                    "labels": bboxes_for_image[:, 0].int(), # [M]
-                    "masks": gt_masks_tensor.bool() # [M, H, W] (Bool)
+                    "boxes": bboxes_for_image[:, 1:],
+                    "labels": bboxes_for_image[:, 0].int(),
+                    "masks": gt_masks_tensor.bool()
                 }
                 metrics_target.append(target_dict)
-            # Debug adicional: comparar predicciones vs targets para la primera imagen del batch
-            try:
-                if batch_size > 0:
-                    i = 0
-                    pred0 = predicts[i]
-                    targ0 = metrics_target[i] if i < len(metrics_target) else None
 
-                    # Predicciones
-                    if 'boxes' in pred0:
-                        b = pred0['boxes'].detach().cpu()
-                        logger.info(f"[DEBUG_COMPARE] Pred boxes sample (first 3): {b[:3]}")
-                        logger.info(f"[DEBUG_COMPARE] Pred boxes coords min: {b.min().item():.2f}, max: {b.max().item():.2f}")
-                    if 'scores' in pred0:
-                        s = pred0['scores'].detach().cpu()
-                        logger.info(f"[DEBUG_COMPARE] Pred scores min/max: {s.min().item():.6f}/{s.max().item():.6f}")
-                    if 'labels' in pred0:
-                        logger.info(f"[DEBUG_COMPARE] Pred labels unique: {pred0['labels'].detach().cpu().unique()} ")
-                    if 'masks' in pred0 and isinstance(pred0['masks'], torch.Tensor):
-                        m = pred0['masks'].detach().cpu()
-                        logger.info(f"[DEBUG_COMPARE] Pred masks dtype: {m.dtype}, shape: {m.shape}, sum example: {int(m[0].sum().item()) if m.numel()>0 else 0}")
-
-                    # Targets
-                    if targ0 is not None:
-                        tb = targ0['boxes'].detach().cpu()
-                        logger.info(f"[DEBUG_COMPARE] Target boxes sample (first 3): {tb[:3]}")
-                        logger.info(f"[DEBUG_COMPARE] Target boxes coords min: {tb.min().item() if tb.numel()>0 else 0:.2f}, max: {tb.max().item() if tb.numel()>0 else 0:.2f}")
-                        logger.info(f"[DEBUG_COMPARE] Target labels unique: {targ0['labels'].detach().cpu().unique() if targ0['labels'].numel()>0 else 'none'}")
-                        tm = targ0['masks'].detach().cpu()
-                        logger.info(f"[DEBUG_COMPARE] Target masks dtype: {tm.dtype}, shape: {tm.shape}, sum example: {int(tm[0].sum().item()) if tm.numel()>0 else 0}")
-            except Exception as _:
-                logger.exception("Error during additional validation debug compare")
-
+            # Actualizar métricas
             mAP = self.metric(metrics_pred, metrics_target)
             return predicts, mAP
             
         except Exception as e:
             logger.error(f"Error in validation step: {str(e)}")
-            logger.error(f"Error type: {type(e)}")
-            # Imprimir la traza completa para una mejor depuración
-            import traceback
-            logger.error(traceback.format_exc())
             raise
 
     def on_validation_epoch_end(self):
