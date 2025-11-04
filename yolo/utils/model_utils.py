@@ -315,6 +315,8 @@ class PostProcess:
 
             # Seleccionar las predicciones finales
             final_boxes = boxes_pre_nms[nms_idx]   # [N_final, 4]
+            # Normalizar las cajas al rango 0-1 ---PROBLEMA: MÉTRICAS NO CALCULADAS
+            final_boxes = final_boxes / torch.tensor([W_img, H_img, W_img, H_img], device=final_boxes.device)
             final_scores = scores_pre_nms[nms_idx]  # [N_final]
             final_labels = labels_pre_nms[nms_idx]  # [N_final]
 

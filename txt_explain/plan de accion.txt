@@ -1,0 +1,442 @@
+Paso 1: Modificar la Carga de Datos (data_loader.py): Asegurar que los polígonos ground truth se carguen, procesen y se incluyan en el lote (batch) junto con las bounding boxes.
+
+	Análisis del paso 1: 
+
+		dataset_utils.py: La función scale_segmentation procesa correctamente las anotaciones de segmentación (polígonos) de los archivos de etiquetas.
+
+		data_loader.py:
+		YoloDataset.load_valid_labels: Carga explícitamente tanto las bboxes como los segments (polígonos).
+		YoloDataset.filter_data: Almacena los segmentos en self.segments.
+		YoloDataset.get_data: Recupera la lista de segmentos.
+		YoloDataset.__getitem__: Pasa los segmentos al pipeline de transform.
+
+		data_augmentation.py:
+		AugmentationComposer: Acepta y pasa segments a todas las transformaciones.
+		PadAndResize, HorizontalFlip, VerticalFlip, y MixUp: Todas estas clases han sido actualizadas para aceptar y transformar correctamente la lista de segmentos (polígonos) junto con las imágenes y las bboxes.
+		collate_fn (en data_loader.py): Este es el punto clave. La función collate_fn empaqueta correctamente los datos en el formato conceptual que discutimos:
+			Concatena todas las bboxes del lote en un solo tensor [N, 6].
+			Agrega todos los segments (polígonos) del lote en una sola lista batch_segments_list.
+			Devuelve un diccionario targets = {"bboxes": cat_bboxes, "segments": batch_segments_list}.
+		Conclusión del Paso 1: Los scripts de datos están listos y no requieren modificaciones. El collate_fn  entregará la estructura de datos que necesita el training_step
+
+-----------------------
+
+Paso 2: Modificar el Matcher (bounding_box_utils.py): Ajustar BoxMatcher.__call__ para que devuelva los índices de los GT emparejados, necesarios para alinear las máscaras en la pérdida.
+
+	El método BoxMatcher.__call__ en tu archivo ya ha sido modificado exactamente como lo describimos:
+	La firma de la función ya especifica que devuelve tres tensores: def __call__(self, target: Tensor, predict: Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
+	El final de la función ya calcula el gt_indices_output (usando torch.where para poner -1 en los inválidos).
+	La sentencia return final ya devuelve los tres elementos: return anchor_matched_targets, valid_mask, gt_indices_output
+	Conclusión del Paso 2: No se requieren modificaciones de código en bounding_box_utils.py. Podemos pasar directamente al siguiente paso.
+
+Paso 3: Modificar la Función de Pérdida (loss_functions.py): Revisar YOLOSegmentationLoss y DualLoss para asegurar que acepten correctamente las salidas del modelo (detección, coeficientes, prototipos) y los targets (bboxes, segmentos) y calculen la pérdida de máscara.
+
+	Diagnóstico Detallado: 
+
+	DualLoss.__call__:
+		Acepta aux_predicts y main_predicts como tuplas (detect_list, coeffs_list).
+		Acepta proto_main y proto_aux por separado.
+		Llama correctamente a self.loss (que es YOLOSegmentationLoss) pasando (detect_raw, coeffs_raw, proto, targets).
+		Esto coincide con el training_step que implementaremos en el Paso 4.
+
+	YOLOSegmentationLoss.__call__:
+		Acepta (detect_raw_list, coeffs_raw_list, proto, targets).
+		Punto 1 (Vec2Box): Llama a self.vec2box(detect_raw_list) para obtener predicts_cls y predicts_box_xyxy.
+		Punto 2 (Coeffs): Concatena manualmente los coeffs_raw_list.
+		Punto 3 (DFL): Concatena manualmente los all_raw_dist.
+		Punto 4 (Targets): Procesa correctamente el diccionario targets (que viene de collate_fn) para crear padded_targets.
+		Punto 5 (Matcher): Llama a self.matcher(padded_targets, ...) y recoge los 3 resultados: align_targets, valid_masks, gt_indices.
+		Punto 6 (Pérdida Detección): Calcula loss_cls, loss_iou, loss_dfl correctamente.
+		Punto 7 (Pérdida Máscara): Esta es la parte clave:
+			Usa torch.where(valid_masks) para obtener los índices de las predicciones positivas.
+			Usa pos_coeffs = all_raw_coeffs[pos_indices_flat] para obtener los coeficientes predichos.
+			Usa pos_gt_indices_flat = gt_indices[valid_masks] para obtener los índices GT del matcher.
+			Alineación Global: Calcula global_gt_indices para mapear los índices GT (relativos a una imagen) a los índices globales (del targets['segments'] concatenado).
+			Recolección de Polígonos: Llama a pos_gt_segments = [targets['segments'][idx] for idx in global_gt_indices.tolist()].
+			Rasterización: Llama a polygons_to_masks.
+			Cálculo de Pérdida: Reconstruye las máscaras predichas y calcula la bce_mask.
+			Recorte (Crop): Usa crop_mask para la pérdida de máscara.
+	Conclusión del Paso 3: Tu loss_functions.py es increíblemente robusto y ya implementa toda la lógica necesaria para la segmentación. No requiere modificaciones.
+
+¡FALLO LÓGICO! ⚠️ El training_step no crasha, pero tu segundo debug output (de loss_functions) revela un problema silencioso pero crítico:
+
+DEBUG: Valid matches: target_on_anchor=0
+
+DEBUG: After matcher: valid_masks.any=False, total_valid=0
+
+	Análisis: El BoxMatcher (en bounding_box_utils.py) no está asignando ningún anchor a ningún ground truth. 
+		La pérdida de tu modelo se está calculando como 0.0 para todas las imágenes, porque el matcher le está diciendo que no hay nada que comparar. 
+	Causa Raíz: El problema está en BoxMatcher.get_valid_matrix. La condición target_on_anchor (que comprueba si min_reg_dist >= -0.1) está fallando para todos. 
+		El log muestra min_reg_dist stats: min=-79.47, max=-0.42. El valor máximo es -0.42, que es menor que -0.1, por lo que la condición siempre es False. 
+		Esta condición (target_on_anchor) requiere que el centro del anchor esté dentro de la caja GT, lo cual es demasiado estricto para el matching inicial.
+	
+	Esto es crucial porque: necesitamos que el matcher nos diga "el anchor X (bbox) se asigna al target Y (bbox)" para que luego, en la función de pérdida, 
+	podamos decir "OK, ahora compara la máscara del anchor X con el polígono del target Y".
+	
+	El problema es que parece que BoxMatcher devuelva todo False, pero al debuggear, no todo es False. Diagnóstico final 30/10: 
+		El problema es un desajuste de unidades (Coordinates Mismatch).
+			* En loss_functions.py, YOLOSegmentationLoss prepara padded_targets (los ground truth). Como vimos en el Paso 1, estos bounding boxes están en coordenadas normalizadas (0.0 a 1.0).
+			* YOLOSegmentationLoss llama a self.matcher(padded_targets, ...).
+			* BoxMatcher.__call__ recibe target (normalizado) y lo divide en target_bbox (normalizado).
+			* Luego, BoxMatcher llama a:
+				* grid_mask = self.get_valid_matrix(target_bbox)
+				* iou_mat = self.get_iou_matrix(predict_bbox, target_bbox)
+			Aquí está el error:
+				En get_valid_matrix, comparas anchors = self.vec2box.anchor_grid (que está en coordenadas de píxeles, ej: 0-640) con target_bbox (que está en coordenadas normalizadas, ej: 0-1).
+				En get_iou_matrix, comparas predict_bbox (que Vec2Box genera en píxeles) con target_bbox (normalizado).
+			El resultado es que max_reg_dist (la distancia en píxeles dividida por el stride) es casi siempre mayor que reg_max=16, excepto quizás en la esquina 0,0. Y el iou_mat es siempre 0 porque una caja de 0-640 nunca se solapa con una caja de 0-1.
+
+		DIA 30/10/2025: OUTPUT FINAL: 
+		
+	Epoch 0:   0%|                                          | 0/153 [00:00<?, ?it/s][10/30/25 16:46:06] DEBUG    target_in_reg_max es      ]8;id=274093;file:///kaggle/working/YOLO/yolo/utils/bounding_box_utils.py\bounding_box_utils.py]8;;\:]8;id=496252;file:///kaggle/working/YOLO/yolo/utils/bounding_box_utils.py#196\196]8;;\
+								 igual a: tensor([[[False,                          
+								 False, False,  ...,                                
+								 True,  True,  True],                               
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  ...,                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True]],                                     
+																					
+										 [[False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  ...,                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True]],                                     
+																					
+										 [[False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  ...,                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True]],                                     
+																					
+										 [[False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  ...,                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True],                                      
+										  [False, False,                            
+								 False,  ...,  True,                                
+								 True,  True]]],                                    
+								 device='cuda:0')                                   
+						DEBUG    After matcher:                
+								 valid_masks.any=True,                              
+								 total_valid=676,                                   
+								 gt_indices_unique=[-1, 0, 2,                       
+								 3, 4, 5, 6, 7, 10, 11]                             
+	
+	INTERPRETACIÓN DEL DEBUG: 
+	
+		Ese log After matcher: (que viene de loss_functions.py 2) es el resultado del BoxMatcher (el asignador de anchors a targets).
+			valid_masks.any=True: ¡Esta es la gran noticia! Significa que el matcher (que arreglamos en el paso anterior) ahora sí está funcionando. Antes era False.
+			total_valid=676: Este es el número clave. 
+				Significa que, en todo tu lote (batch), el matcher ha asignado un total de 676 anchors (ranuras de predicción) a un objeto ground truth (un polígono/caja real).
+			gt_indices_unique=[-1, 0, 2, ... 11]:
+				-1: Representa a todos los anchors que son "fondo" (no fueron asignados a ningún objeto).
+				0, 2, 3, ... 11: Estos NO son IDs de clase. Son los índices de los objetos ground truth (los polígonos) que sí recibieron una asignación.
+		¿Por qué 676 (un número tan alto)?Tu matcher (TAL) no hace una asignación 1-a-1. Hace una asignación uno-a-muchos (one-to-many).
+		Por cada objeto ground truth (cada polígono) en una imagen, el matcher asigna los topk (ej. 10) mejores anchors para que aprendan a predecir ese objeto.Si en tu lote (batch) tienes, 
+		por ejemplo, 70 objetos ground truth en total, y el matcher asigna un promedio de 9-10 anchors a cada uno... (70 * 9.5) $\approx$ 665.
+		
+		Conclusión: total_valid=676 es el número total de asignaciones positivas, no de clases ni de máscaras. 
+					Es la cantidad de muestras que se usarán para calcular las pérdidas (IoU, DFL y, lo más importante, la pérdida de máscara).
+					
+	
+		
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Paso 4: Modificar el Bucle de Entrenamiento (solver.py): Actualizar TrainModel.training_step para manejar las nuevas salidas del modelo y pasarlas a la función de pérdida.
+
+	Paso 4 (Bucle de Entrenamiento): ¡ÉXITO! ✅ El DEBUG: Salida del Modelo (predicts) (tu primer debug output) confirma que tu suposición era 100% correcta. La estructura de predicts es exactamente la que el código try...except en tu training_step espera:
+		Un diccionario con claves 'Main' y 'AUX'.
+		Cada clave contiene una tupla de 2 elementos: (Item 0, Item 1).
+		Item 0 (Detección) es una lista de 3 tuplas (una por escala), y cada tupla contiene los tensores (cls, dist, box).
+		Item 1 (Segmentación) es una lista de 4 tensores: 3 de coeficientes (uno por escala) y el último (Item 3) que es el prototipo ([4, 32, 160, 160]).
+	Conclusión: Tu TrainModel.training_step en solver.py ya es correcto y no necesita modificaciones. Está desempaquetando la salida del modelo perfectamente y 
+				llamando a self.loss_fn (DualLoss) de la manera que loss_functions.py espera.
+				
+	
+		ENTRENA LA ÉPOCA Y FALLA EN VALIDACIÓN. 
+		
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Paso 5: Modificar el Bucle de Validación (solver.py): Reimplementar ValidateModel.validation_step para realizar el post-procesamiento de segmentación (NMS + reconstrucción de máscaras) y calcular el mAP de segmentación (iou_type="segm").
+
+	PRIMERA CORRECCIÓN PARA EL BUCLE DE VALIDACIÓN 30/10. SE RECIBE ERROR:  File "/kaggle/working/YOLO/yolo/tools/loss_functions.py", line 44, in forward
+																				iou_diag = torch.diag(iou).clamp(0, 1) # Asegurar que esté en [0, 1]
+																						   ^^^^^^^^^^^^^^^
+																			RuntimeError: diag(): Supports 1D or 2D tensors. Got 3D
+	
+	El output es exactamente el que esperábamos.
+		Entrenamiento: El training_step se completó (la época 0 terminó).
+		Validación: El validation_step ejecutó la corrección para targets, pero falló exactamente donde predijimos: dentro de la llamada a self.metric.
+		Error: ValueError: Expected all dicts in predsto contain themasks key.
+			Esto confirma que tu métrica MeanAveragePrecision(iou_type="segm") está buscando máscaras, pero la función to_metrics_format (y, por extensión, el PostProcess actual) 
+			solo le está dando cajas (boxes), etiquetas (labels) y puntuaciones (scores).
+			Estamos listos para el Paso 6: modificar PostProcess en model_utils.py para que reconstruya las máscaras.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Paso 6: Modificar el Post-Procesamiento (model_utils.py): Actualizar PostProcess para que maneje las salidas de segmentación (coeficientes y prototipos) 
+además de las cajas, para la validación.
+
+	Necesitamos que PostProcess haga lo siguiente:
+		Acepte las salidas de segmentación (coeficientes y prototipos) del modelo, además de las salidas de detección.
+		Realice el NMS (filtrado de cajas) como ya hace.
+		Para las cajas que pasan el NMS, tome sus coeficientes de máscara correspondientes.
+		Reconstruya las máscaras binarias multiplicando esos coeficientes por los prototipos.
+		Devuelva una estructura de datos (una lista de diccionarios, uno por imagen) que contenga tanto las cajas, etiquetas, puntuaciones como las máscaras reconstruidas.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ESTADO ACTUAL: 	Al lanzar el entrenamiento se realiza bien los cálculos de funciones de pérdidas tras los batches, y la validación tras las épocas. 
+				Faltaría modificar la predicción para que trabaje por máscaras como el resto del workflow. 
+
+Resumen Corto del Progreso
+Objetivo Alcanzado: Hemos adaptado con éxito casi toda la cadena de procesamiento para la segmentación de instancias.
+Datos (Paso 1): ✅ Cargando polígonos y bboxes .
+Matcher (Paso 2): ✅ Devolviendo los índices GT .
+Bucle de Entrenamiento (Paso 4): ✅ Desempaquetando correctamente las salidas del modelo (Detección + Segmentación) .
+Post-Proceso (Paso 6): ✅ PostProcess reconstruye las máscaras para la validación .
+Bucle de Validación (Paso 5): ✅ Prepara los targets de máscara GT para la métrica. No crashea.
+
+
+PROBLEMA ACTUAL DE MÁXIMA PRIORIDAD: El modelo no aprende entre épocas, parece que hay un conflicto porque se ha realizado la modificación de que trabaje con máscaras de manera que
+									 sólo funciona con el optimizador SGD. Queremos que el código sea capaz de trabajar con cualquier optimizador (dando prioridad a AdamW). 
+									 
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+DESCRIPCIÓN DETALLADA DEL PROBLEMA OPTIMIZADOR. 
+	El problema actual es crítico: el modelo NO aprende. Aunque el código se ejecuta sin crashes durante el entrenamiento, los pesos del modelo no se están actualizando. 
+	Esto se evidencia por tres síntomas claros identificados en tu plan:
+		1. Pérdidas Estáticas: 	Las pérdidas promedio por época (BoxLoss_epoch, MaskLoss_epoch, etc.) son idénticas época tras época. 
+								El log muestra que la pérdida no disminuye en absoluto.
+		2. Pérdidas de Step Atascadas: 	Las pérdidas por step (ej. BoxLoss_step) se mantienen "atascadas" en sus valores máximos (ej. 8.75), 
+										lo que indica que el modelo no mejora ni siquiera entre batches.
+		3. Métricas Nulas: Como consecuencia directa, las métricas de validación (mAP) son 0.0 o -1.0 y no muestran ninguna mejora.
+		
+HIPÓTESIS DEL PROBLEMA.
+	La causa más probable: un conflicto en la lógica del optimizador.
+		El Conflicto: 	El repositorio base utilizaba un sistema manual de optimización (probablemente para SGD) que requería funciones personalizadas como next_batch 
+						y next_epoch. Estas funciones se definían en model_utils.py y se llamaban explícitamente desde solver.py.
+		El Cambio: Has actualizado la configuración (train.yaml) para usar un optimizador moderno (AdamW) y un scheduler de Lightning (LinearLR).
+		La Sospecha: La sospecha es que el código antiguo (next_batch, on_train_epoch_start) sigue presente en solver.py y model_utils.py. 
+					 Este código heredado está interfiriendo con el sistema de optimización automático de Lightning, impidiendo que AdamW actualice los pesos.
+		La Evidencia: La prueba clave que se identifica es que los logs de entrenamiento siguen mostrando warnings de momentum/0. 
+					  "Momentum" es un hiperparámetro de SGD, no de AdamW. Su presencia confirma que la lógica de optimización antigua sigue activa y está causando el conflicto.
+	
+PRÓXIMA ACCIÓN SUGERIDA (A ANALIZAR) 
+El siguiente paso inmediato no es implementar una solución ciegamente, sino confirmar la hipótesis.
+	* La tarea es revisar solver.py y model_utils.py para verificar visualmente que las llamadas manuales (next_batch, on_train_epoch_start) y 
+	  las definiciones de optimizador personalizadas (create_optimizer) todavía existen.
+	* Una vez confirmado, el paso siguiente será eliminar esa lógica heredada.
+	
+EJECUCIÓN: ANÁLISIS DE HIPÓTESIS: ---
+Diagnóstico Completo:
+	A. Problema Principal: La manipulación directa del optimizador está rompiendo el flujo estándar de optimización de PyTorch Lightning.
+	B. Causas Específicas:
+		1. Modificación en tiempo de ejecución de las clases de optimizador
+		2. Gestión manual del learning rate y momentum
+		3. Llamadas forzadas a next_batch() y next_epoch()
+		4. Interferencia con el estado interno de los optimizadores
+		5. Por qué funciona con SGD pero no con AdamW:
+			* SGD es más simple y tolerante a manipulaciones directas
+			* AdamW mantiene estados internos adicionales (momentos adaptativos) que se ven afectados por esta manipulación
+			* La lógica personalizada asume un comportamiento similar a SGD (usa momentum explícitamente)
+	C. Confirmación de Hipótesis:
+		* La hipótesis presentada en el plan de acción es correcta. 
+		* El problema NO está en la lógica de segmentación sino en la gestión del optimizador.
+
+	D. Impacto:
+		* El optimizador no puede mantener su estado interno correctamente
+		* Las actualizaciones de pesos son inconsistentes
+		* El learning rate y momentum se manipulan de forma no estándar
+		* La convergencia del modelo se ve comprometida
+		
+SE HAN REALIZADO LAS MODIFICACIONES EN LOS SCRIPTS models_utils.py Y solver.py PARA ELIMINAR EL HARDCODEO. EL OUTPUT OBTENIDO TAMPOCO MUESTRA RESULTADOS, SE PRECISA ANÁLISIS A FONDO.
+
+Posibles causas principales del mAP=0 (prioridad por probabilidad):
+	1. PostProcess está devolviendo cero predicciones (lista vacía o pred dicts con 0 cajas). Resultado: metric recibe [] y mAP=0.
+	2. Las predicciones existen pero todas tienen score muy bajo (filtradas por keep = scores > self.nms.min_confidence) o nms/max_bbox las elimina.
+	3. Las cajas predichas están en escala incorrecta (por ejemplo, todas 0 o fuera del rango), por eso no solapan con GT → mAP=0.
+	4. Predicciones con tipos/formato incorrecto (por ejemplo masks con shape incorrecto) que hacen que torchmetrics trate como no-detecciones (o genere warnings que se ignoran).
+	5. El modelo produce logits extremadamente negativos (clases ~0 prob), por lo que no hay detecciones útiles.
+	
+DEBUG: Inspeccionar predicts justo después de la llamada a post_process. 
+		-> Añadir 
+			pred0 = predicts[0] if len(predicts)>0 else {}
+			logger.info(f"VALID DEBUG: num_images={len(predicts)}, first_keys={list(pred0.keys())}")
+			if pred0:
+				logger.info(f"VALID DEBUG: boxes.shape={pred0['boxes'].shape}, scores.shape={pred0['scores'].shape}, labels.shape={pred0['labels'].shape}")
+				if 'masks' in pred0:
+					logger.info(f"VALID DEBUG: masks.shape={pred0['masks'].shape}, masks.dtype={pred0['masks'].dtype}")
+		
+		-> Resultado esperado: cuántas cajas hay y si hay máscaras. Si len(predicts)==batch_size but each dict has 0 boxes, eso apunta a filtrado agresivo o scores=0.
+
+Validation DataLoader 0:   2%|▏         | 1/66 [00:05<05:39,  0.19it/s][11/04/25 09:01:28] INFO     === DEBUG: Model Output Structure ===  solver.py:78
+                    INFO     Main: [<class 'list'>, <class 'list'>] solver.py:81
+                    INFO     AUX: [<class 'list'>, <class 'list'>]  solver.py:81
+                    INFO                                            solver.py:92
+                             === DEBUG: Post-Process Output ===                 
+                    INFO                                            solver.py:94
+                             Imagen 0:                                          
+                    INFO     - Boxes shape: torch.Size([134, 4])    solver.py:95
+                    INFO     - Labels shape: torch.Size([134])      solver.py:96
+                    INFO     - Scores: min=0.0001, max=0.0487       solver.py:97
+                    INFO     - Masks: tensor shape                 solver.py:100
+                             torch.Size([134, 640, 640])                        
+                    INFO                                            solver.py:94
+                             Imagen 1:                                          
+                    INFO     - Boxes shape: torch.Size([81, 4])     solver.py:95
+                    INFO     - Labels shape: torch.Size([81])       solver.py:96
+                    INFO     - Scores: min=0.0001, max=0.0109       solver.py:97
+                    INFO     - Masks: tensor shape torch.Size([81, solver.py:100
+                             640, 640])                                         
+
+	* Las máscaras de salida NO son polígonos: PostProcess devuelve máscaras rasterizadas (tensores) con shape [N, H, W] — en tus logs: por ejemplo torch.Size([151, 640, 640]). 
+		Eso confirma que las máscaras están reconstruidas y binarizadas (no polígonos).
+	* Hay muchísimas predicciones por imagen (decenas/hundreds) y los scores son muy bajos: min ≈ 0.0001, max ≈ 0.01–0.05 según batch. 
+		Eso explica por qué el comportamiento de la métrica puede ser incorrecto o dar mAP muy bajo: las puntuaciones están en un rango muy pequeño.
+	* El código ya filtra por self.nms.min_confidence antes de NMS y además _reconstruct_masks binariza las máscaras con ese mismo umbral. 
+		Tus logs muestran muchas cajas conservadas, por lo que tu nms.min_confidence probablemente esté muy bajo (o 0), de lo contrario no verías tantas boxes.
+
+DEBUG: PostProcess.__call__ -> 	imprimir scores.max(), scores.mean(), (scores > self.nms.min_confidence).sum(), boxes_pre_nms[:,:].min(dim=0), boxes_pre_nms[:,:].max(dim=0)
+								si scores.max() es aproximadamente 0 o negative_after_sigmoid es aprox 0, el modelo no produce confianza. 
+DEBUG: Revisión de image_size y escalado
+		-> Confirmar que en validation_step al llamar a self.post_process(model_output, image_size=[W,H]) con W,H correctos. 
+		-> Comprobar self.vec2box.image_size dentro de PostProcess.__call__ : logger.info(f"converter.image_size = {self.converter.image_size}"). 
+			- Si converter.image_size contiene (0,0) o está intercambiado (W/H swapped) puede causar boxes mal escaladas.
+
+DEBUG: Revisar los targets pasados a las métricas. 
+		-> En el proceso de validación (validation_step) ya se convierten los targets. Asegurar imprimiento: logger.info(f"GT count image0: boxes={metrics_target[0]['boxes'].shape}, masks={metrics_target[0]['masks'].shape}")
+		-> Si los GT están vacíos para todas las imágenes, metric devuelve 0 por falta de GT (revisar collate_fn).
+
+DEBUG: Check rápido del modelo raw outputs (si mAp=0 y pérdidas no cero): 
+		-> En validación (validation_step) antes del postprocess: 
+			logger.info(f"RAW OUTPUT KEYS: {list(model_output.keys())}")
+			mo = model_output['Main']
+			logger.info(f"RAW MAIN len={len(mo)}; detect0 types: {[type(x) for x in mo[0]]}")
+			# print shapes:
+			for layer in mo[0]:
+				logger.info(f"layer shape: {[t.shape for t in layer]}")
+		-> Confirmar que logits no sean todos -inf/-large negative.
+
+QUE BUSCAR EN LOS DEBUGS: 
+	boxes.shape = (N,4) with N>0. If N==0 repeatedly -> problem upstream.
+	scores.max() near 1 or at least >0.1. If ~0 -> model not predicting.
+	keep.sum() equals 0 -> min_confidence filter removed everything.
+	boxes min/max outside [0, W] / [0,H] or NaN. 
+
+Nuevo DEBUG:
+	Añadí debug en validation_step (en solver.py) que:
+		imprime sample de predicciones (primeras 3 cajas), min/max de coordenadas, min/max de scores, labels únicos y dtype/área de máscara (suma) para la primera imagen del batch,
+		imprime lo mismo para los ground-truth (targets) para la misma imagen,
+		captura excepciones para que no interrumpa la validación.
+	Los logs nuevos aparecen con la etiqueta [DEBUG_COMPARE] para localizarlos fácilmente.
+	
+Puntos importantes que pueden indicar problemas potenciales según el debugg:
+
+	1. Diferencias en las coordenadas de las cajas:
+		* Predicciones: están en un rango muy amplio (-99.88 a 694.00)
+		* Ground truth: están normalizadas (0.21 a 0.80)
+
+2. Etiquetas:
+	* Las predicciones están perdiendo algunas clases (faltan las clases 1, 16, 17, 24, 25 en las predicciones)
+	* El modelo predice ~450 objetos por imagen cuando el ground truth tiene ~30-32 objetos
+
+3. Diferencia en las máscaras:
+	* Predicciones: shape [450-466, 640, 640] con sum ~409600
+	* Ground truth: shape [30-32, 640, 640] con sum ~790-1341
+
+El problema más grave parece ser que el modelo está:
+	A. Prediciendo demasiados objetos (sobredetección) -- NO ES PRIORIDAD
+	B. Las coordenadas de las cajas no están en la misma escala que el ground truth
+	C. Las máscaras predichas están cubriendo demasiada área. 
+	
+DESCRIPCIÓN DETALLADA DEL PROBLEMA ESCALADO DE PREDICCIONES Y GROUND TRUTH:
+Se ha identificado una inconsistencia crítica en la normalización de las cajas delimitadoras (bounding boxes) a lo largo del pipeline:
+
+1. Estado Actual de las Normalizaciones:
+   - Dataset (data_loader.py):
+     * Los labels (bboxes y segments) se cargan normalizados (0-1)
+     * load_valid_labels() verifica y clipea los puntos al rango 0-1
+   - Post-Procesamiento (model_utils.py):
+     * Las predicciones del modelo están en coordenadas absolutas (píxeles)
+     * Solo se normalizan temporalmente para el crop de máscaras
+   - Métricas (solver.py):
+     * Los targets mantienen su normalización original (0-1)
+     * Las predicciones llegan sin normalizar (0-640)
+
+2. Impacto del Problema:
+   - Cálculo incorrecto de pérdidas debido a escalas incompatibles
+   - Métricas de evaluación potencialmente inexactas
+   - Dificultad para comparar predicciones con ground truth
+   - Debug logs muestran predicciones fuera de rango (-99 a 694)
+
+3. Soluciones Propuestas:
+
+   a) Solución en validation_step:
+      - Normalizar predicciones justo antes de calcular métricas
+      - Ventaja: No afecta a otros componentes
+      - Desventaja: La normalización ocurre tarde en el pipeline
+
+   b) Solución en PostProcess (IMPLEMENTADA):
+      - Normalizar cajas después del NMS
+      - Ventaja: Predicciones consistentes en todo el pipeline
+      - Ventaja: Más limpio y centralizado
+      - Código más mantenible
+
+   c) Solución Alternativa (Futura):
+      - Revisar y unificar todas las normalizaciones
+      - Documentar claramente el formato esperado en cada etapa
+      - Añadir validaciones de rango en puntos críticos
+
+4. Próximos Pasos:
+   - Monitorizar el impacto en el entrenamiento
+   - Verificar la mejora en las métricas
+   - Considerar implementar la solución completa (c) en futuras iteraciones

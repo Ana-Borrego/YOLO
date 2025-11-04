@@ -1,0 +1,53 @@
+---- Adaptar Repositorio YOLO para Segmentación de Instancias ----
+
+Tu Tarea: Guíame a través del proceso de modificar un repositorio existente de detección de objetos YOLO para que soporte el entrenamiento y la validación de segmentación de instancias.
+
+Revisa este contexto general: ---
+
+1. Situación Inicial
+	* Base del Repositorio: Estamos trabajando con un repositorio YOLO basado en Python que utiliza PyTorch Lightning para la estructura de entrenamiento y Hydra para la gestión de configuración.
+	* Funcionalidad Actual: El repositorio está actualmente configurado para la detección de objetos (predecir bounding boxes y etiquetas de clase). Entrena con éxito modelos de detección como v9-t.
+	* Carga de Datos: El DataLoader (YoloDataset en data_loader.py) está configurado para cargar imágenes y anotaciones. Crucialmente, incluso si las anotaciones contienen polígonos de segmentación, la función actual load_valid_labels las convierte en bounding boxes ([class_id, x_min, y_min, x_max, y_max]) tomando las coordenadas mínimas/máximas.
+	* Función de Pérdida: La función de pérdida actual (YOLOLoss / DualLoss en loss_functions.py) está diseñada para detección de objetos, calculando pérdidas basadas en regresión de bounding box (como CIoU, DFL) y predicción de clase (BCE).
+	* Bucle de Entrenamiento/Validación: El script solver.py contiene las clases TrainModel y ValidateModel. El training_step utiliza un BoxMatcher y la pérdida de detección. El validation_step utiliza post-procesamiento (incluyendo NMS diseñado para cajas) y calcula métricas mAP de bounding box.
+	* Arquitectura del Modelo: El repositorio puede cargar diferentes arquitecturas de modelo definidas vía YAML (como v9-t.yaml para detección, v9-c-seg.yaml para segmentación). La arquitectura de segmentación (v9-c-seg.yaml) incluye tanto cabezales de detección como cabezales de prototipos/coeficientes de máscara.
+
+2. Objetivo Final
+	* Adaptar el repositorio para entrenar y validar con éxito un modelo de segmentación de instancias (específicamente usando la arquitectura v9-c-seg.yaml). Esto implica:
+	* Cargar y utilizar datos de segmentación por polígonos junto con bounding boxes durante el entrenamiento.
+	* Implementar una función de pérdida de segmentación adecuada que combine pérdida de caja, pérdida de clase y pérdida de máscara.
+	* Modificar el bucle de entrenamiento para pasar correctamente los datos y calcular la pérdida de segmentación.
+	* Modificar el bucle de validación para realizar post-procesamiento específico de segmentación y calcular métricas mAP de segmentación (iou_type="segm").
+
+3. Scripts que Requieren Modificación (Visión Conceptual). Necesitarás guiar modificaciones principalmente en estos archivos:
+	* data_loader.py & dataset_utils.py: Adaptar la carga de datos (YoloDataset, collate_fn, tensorlize) para cargar, procesar y devolver tanto las bounding boxes como los datos originales de segmentación por polígonos sin descartar los polígonos.
+	* loss_functions.py: Implementar una nueva clase de pérdida (ej., YOLOSegmentationLoss) que calcule las pérdidas de caja, clase y máscara. Esto implicará integrar pérdidas estándar (como BCE, Dice) y manejar el emparejamiento (matching) entre instancias predichas e instancias ground truth (incluyendo máscaras). Modificar create_loss_function para seleccionar la pérdida apropiada según el tipo de modelo.
+	* solver.py:
+		* TrainModel: Actualizar training_step para desempaquetar datos de segmentación, llamar correctamente a la nueva función de pérdida (pasando salidas crudas del modelo, cajas ground truth y segmentos ground truth), y registrar los componentes de pérdida relevantes.
+		* ValidateModel: Actualizar __init__ para usar MeanAveragePrecision(iou_type="segm"). Reescribir validation_step para realizar post-procesamiento de segmentación (combinando cajas de NMS con máscaras reconstruidas) y formatear la salida (incluyendo máscaras booleanas) correctamente para la actualización de la métrica de segmentación. Actualizar on_validation_epoch_end si es necesario para registrar métricas de segmentación.
+	* module.py: Verificar y potencialmente corregir el forward pass de MultiheadSegmentation para asegurar que devuelve tanto las salidas de detección como las de segmentación (coeficientes y prototipos) en un formato utilizable.
+	* bounding_box_utils.py: Modificar BoxMatcher.__call__ para que devuelva los índices de las instancias ground truth emparejadas, necesarios para alinear máscaras en la función de pérdida. Potencialmente añadir funciones de utilidad para el post-procesamiento de segmentación si es necesario.
+	* logging_utils.py: Actualizar callbacks (como ImageLogger, YOLORichProgressBar) que acceden al lote o a las salidas de los pasos para manejar las nuevas estructuras de datos (ej., la tupla de 6 ítems del lote, el formato de diccionario de validation_step).
+
+4. Puntos Críticos y Detalles
+	* Manejo de Datos de Máscara: ¿Cómo se deben almacenar, agrupar en lotes (ya que los polígonos por imagen varían) y pasar a la pérdida los datos de polígonos?
+	* Rasterización: Las máscaras ground truth necesitan ser generadas (rasterizadas) a partir de los polígonos. Esto requiere elegir un método (ej., fillPoly de OpenCV) y manejar correctamente la desnormalización de coordenadas.
+	* Reconstrucción de Máscaras: Las máscaras predichas necesitan ser reconstruidas a partir de los prototipos y coeficientes del modelo.
+	* Emparejamiento Predicción-GT: ¿Cómo alineamos las máscaras predichas con las máscaras ground truth para el cálculo de la pérdida? Aprovechar el emparejamiento de cajas (BoxMatcher) es clave.
+	* Combinación de Pérdidas: Seleccionar pérdidas de segmentación apropiadas (ej., BCE + Dice) y ponderarlas en relación con las pérdidas de caja/clase es crucial para un entrenamiento estable.
+	* Post-procesamiento de Validación: Combinar los resultados de NMS (cajas) con las máscaras reconstruidas correspondientes y formatear para mAP(iou_type="segm") requiere una implementación cuidadosa.
+	* Memoria: Los modelos de segmentación y el procesamiento de máscaras consumen mucha memoria. Las configuraciones (batch_size, image_size) pueden necesitar una reducción significativa en comparación con la detección.
+
+---
+
+IMPORTANTE: Protocolo de Interacción (Seguir Estrictamente). ¡¡Por favor, adhiérete a los siguientes pasos de interacción!!
+
+	1. Diagnóstico General: Reconoce brevemente el objetivo y las áreas principales que requieren cambios.
+	2. Proponer Plan de Acción: Esboza un plan de alto nivel, dividiendo el proceso de modificación en pasos lógicos (ej., Paso 1: Modificar DataLoader, Paso 2: Implementar Función de Pérdida, Paso 3: Modificar Bucle de Entrenamiento, etc.).
+	3. Procesar Cada Paso Secuencialmente: Para cada paso en tu plan propuesto:
+		(3.1.a) Diagnosticar Cambios: Detalla las funciones/clases específicas dentro del/los script(s) relevante(s) que necesitan modificación para este paso.
+		(3.1.b) Solicitar Contexto: Pregúntame si necesitas ver el contenido de algún otro script específico o requieres aclaración sobre algún detalle relacionado con este paso antes de proceder. Espera mi respuesta.
+		(3.1.c) Explicar Por Qué y Cómo (Conceptual): Explica por qué se necesitan los cambios y conceptualmente cómo se implementarán (ej., "Necesitamos modificar collate_fn para manejar listas de segmentos acolchando las bounding boxes pero manteniendo los segmentos como una lista"). NO proporciones código específico todavía.
+		(3.1.d) Solicitar Verificación: Pídeme que confirme que entiendo los cambios conceptuales propuestos para este paso y que debes proceder a proporcionar las modificaciones detalladas del código. Espera mi confirmación explícita ("Ok", "Procede", "Sí", etc.).
+	4. Ejecutar Paso (Proporcionar Código): Solo después de mi confirmación (Paso 2.1.d), proporciona las modificaciones específicas del código (ej., la función o clase actualizada completa, indicando claramente los cambios) y cualquier instrucción necesaria (como añadir imports o instalar librerías).
+	5. Repetir: Pasa al siguiente paso de tu Plan de Acción y repite el proceso desde 2.1.a.
