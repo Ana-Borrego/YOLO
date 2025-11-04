@@ -693,20 +693,13 @@ def to_metrics_format(prediction: Union[Tensor, Dict[str, Tensor]]):
         boxes = prediction[:, 1:5]
         boxes = torch.clamp(boxes, 0, 1)  # Asegurar rango válido
         
-        scores = prediction[:, 5] if prediction.size(1) == 6 else torch.ones(prediction.size(0), device=prediction.device)
-        labels = prediction[:, 0].int()
-        
-        # Filtrar por score
-        mask = scores > 0.05  # Un umbral mínimo para considerar predicciones válidas
-        boxes = boxes[mask]
-        labels = labels[mask]
-        scores = scores[mask]
-        
-        return {
+        bbox = {
             "boxes": boxes,
-            "labels": labels,
-            "scores": scores
+            "labels": prediction[:, 0].int()
         }
+        if prediction.size(1) == 6:
+            bbox["scores"] = prediction[:, 5]
+        return bbox
     
     elif isinstance(prediction, dict):
         # Formato nuevo (Dict)
@@ -714,15 +707,9 @@ def to_metrics_format(prediction: Union[Tensor, Dict[str, Tensor]]):
         boxes = torch.clamp(prediction['boxes'], 0, 1)
         prediction['boxes'] = boxes
         
-        # Filtrar por score si existe
-        if 'scores' in prediction:
-            mask = prediction['scores'] > 0.05
-            prediction['boxes'] = boxes[mask]
-            prediction['labels'] = prediction['labels'][mask]
-            prediction['scores'] = prediction['scores'][mask]
-            
-            if 'masks' in prediction:
-                prediction['masks'] = prediction['masks'][mask].bool()
+        # Asegurar que las máscaras sean booleanas si existen
+        if 'masks' in prediction:
+            prediction['masks'] = prediction['masks'].bool()
         
         return prediction
     
