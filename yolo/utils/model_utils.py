@@ -227,6 +227,11 @@ class PostProcess:
         H_img, W_img = img_shape_hw
         H_orig, W_orig = orig_shape_hw
         M_h, M_w = proto.shape[-2:]
+        
+        # ---- INICIO DE CORRECCIÓN DE OOM ----
+        # Definimos un tamaño de chunk para no desbordar la VRAM
+        chunk_size = 256
+        # ---- FIN DE CORRECCIÓN DE OOM ----
 
         if pred_coeffs.numel() == 0:
             return torch.empty(0, H_orig, W_orig, dtype=torch.bool, device=proto.device)
@@ -235,22 +240,38 @@ class PostProcess:
         pred_masks_logits = (pred_coeffs @ proto.view(proto.shape[1], -1)).view(-1, M_h, M_w)
 
         # 2. Recortar (Crop)
-        # Normalizar las cajas predichas (que vienen en píxeles) al tamaño de la 
-        # *imagen de entrada* (ej. 640x640)
         boxes_norm_img = pred_boxes_xyxy_pixels / torch.tensor([W_img, H_img, W_img, H_img], device=proto.device)
-        
-        # crop_mask espera (Masks[N, M_h, M_w], Boxes[N, 4] normalizadas 0-1)
         masks_cropped = crop_mask(pred_masks_logits, boxes_norm_img) # [N, M_h, M_w]
         
-        # 3. Interpolar (Upsample) a tamaño de imagen original y aplicar Sigmoid
-        masks_upscaled = F.interpolate(
-            masks_cropped.unsqueeze(1),
-            size=orig_shape_hw,
-            mode='bilinear',
-            align_corners=False
-        ).squeeze(1) # [N, H_orig, W_orig]
+        # ---- INICIO DE CORRECCIÓN DE OOM ----
+        # 3. Interpolar (Upsample) en chunks
+        
+        num_masks = masks_cropped.shape[0]
+        masks_upscaled_list = []
+        
+        for i in range(0, num_masks, chunk_size):
+            # Selecciona un chunk de máscaras recortadas
+            chunk = masks_cropped[i : i + chunk_size].unsqueeze(1) # [chunk_size, 1, M_h, M_w]
+            
+            # Interpola solo ese chunk
+            chunk_upscaled = F.interpolate(
+                chunk,
+                size=orig_shape_hw,
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(1) # [chunk_size, H_orig, W_orig]
+            
+            masks_upscaled_list.append(chunk_upscaled)
+        
+        if num_masks > 0:
+            # Concatena los resultados de los chunks
+            masks_upscaled = torch.cat(masks_upscaled_list, dim=0) # [N, H_orig, W_orig]
+        else:
+            return torch.empty(0, H_orig, W_orig, dtype=torch.bool, device=proto.device)
+        # ---- FIN DE CORRECCIÓN DE OOM ----
         
         # 4. Binarizar
+        # Aplicamos sigmoide (porque teníamos logits) y un umbral
         return (masks_upscaled.sigmoid() > self.nms.min_confidence) # [N, H_orig, W_orig] (Bool)
     
     def __call__(
