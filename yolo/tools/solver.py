@@ -61,6 +61,13 @@ class ValidateModel(BaseModel):
         # Inicializar la métrica aquí
         self.metric = MeanAveragePrecision(iou_type=self.iou_type, box_format="xyxy", backend="faster_coco_eval")
         self.metric.warn_on_many_detections = False
+    
+    # --- AÑADE ESTA FUNCIÓN ENTERA ---
+    def on_validation_epoch_start(self):
+        """Se llama al inicio de cada época de validación."""
+        # Inicializa el contador de predicciones en el dispositivo correcto.
+        self.preds_found_in_epoch = torch.tensor(0, dtype=torch.long, device=self.device)
+    # --- FIN DE LA NUEVA FUNCIÓN ---
         
     def val_dataloader(self):
         return self.val_loader

@@ -127,7 +127,7 @@ def create_optimizer(model: YOLO, optim_cfg: OptimizerConfig) -> Optimizer:
     ]
 
     def next_epoch(self, batch_num, epoch_idx):
-        self.min_lr = self.max_lr
+        self.min_lr = 0.0001
         self.max_lr = [param["lr"] for param in self.param_groups]
         self.min_mom = lerp(0.8, 0.937, min(epoch_idx, 3), 3)
         self.max_mom = lerp(0.8, 0.937, min(epoch_idx + 1, 3), 3)
