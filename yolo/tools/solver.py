@@ -112,7 +112,6 @@ class ValidateModel(BaseModel):
 
             # Actualizar métricas
             mAP = self.metric(metrics_pred, metrics_target)
-            return predicts, mAP
             
         except Exception as e:
             logger.error(f"Error in validation step: {str(e)}")
