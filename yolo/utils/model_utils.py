@@ -217,7 +217,7 @@ class PostProcess:
 
     def _reconstruct_masks(self, 
                             pred_coeffs: Tensor, # [N_post_nms, M_c]
-                            pred_boxes_xyxy: Tensor, # [N_post_nms, 4]
+                            pred_boxes_xyxy_pixels: Tensor, # [N_post_nms, 4] (EN PÍXELES)
                             proto: Tensor, # [1, M_c, M_h, M_w] (solo para esta imagen)
                             img_shape_hw: Tuple[int, int], # (H, W)
                             orig_shape_hw: Tuple[int, int] # (H_orig, W_orig)
@@ -235,16 +235,14 @@ class PostProcess:
         pred_masks_logits = (pred_coeffs @ proto.view(proto.shape[1], -1)).view(-1, M_h, M_w)
 
         # 2. Recortar (Crop)
-        # Normalizar las cajas predichas al tamaño de la *imagen de entrada* (ej. 640x640)
-        # Esto es necesario para 'crop_mask'
-        boxes_norm_img = pred_boxes_xyxy / torch.tensor([W_img, H_img, W_img, H_img], device=proto.device)
+        # Normalizar las cajas predichas (que vienen en píxeles) al tamaño de la 
+        # *imagen de entrada* (ej. 640x640)
+        boxes_norm_img = pred_boxes_xyxy_pixels / torch.tensor([W_img, H_img, W_img, H_img], device=proto.device)
         
         # crop_mask espera (Masks[N, M_h, M_w], Boxes[N, 4] normalizadas 0-1)
         masks_cropped = crop_mask(pred_masks_logits, boxes_norm_img) # [N, M_h, M_w]
         
         # 3. Interpolar (Upsample) a tamaño de imagen original y aplicar Sigmoid
-        # Usamos F.interpolate para reescalar a H_orig, W_orig
-        # masks_cropped.unsqueeze(1) -> [N, 1, M_h, M_w]
         masks_upscaled = F.interpolate(
             masks_cropped.unsqueeze(1),
             size=orig_shape_hw,
@@ -253,7 +251,6 @@ class PostProcess:
         ).squeeze(1) # [N, H_orig, W_orig]
         
         # 4. Binarizar
-        # Aplicamos sigmoide (porque teníamos logits) y un umbral
         return (masks_upscaled.sigmoid() > self.nms.min_confidence) # [N, H_orig, W_orig] (Bool)
     
     def __call__(
@@ -334,26 +331,41 @@ class PostProcess:
             # Filtrar por confianza mínima
             keep = scores > self.nms.min_confidence
             
-            boxes_pre_nms = img_preds_box[keep] # [K, 4]
+            if not keep.any():
+                # NO HAY PREDICCIONES: Devolver tensores vacíos para esta imagen
+                empty_dict = {
+                    "boxes": torch.empty(0, 4, device=preds_cls.device),
+                    "labels": torch.empty(0, dtype=torch.long, device=preds_cls.device),
+                    "scores": torch.empty(0, device=preds_cls.device),
+                }
+                if is_segmentation:
+                    empty_dict["masks"] = torch.empty(0, H_orig, W_orig, dtype=torch.bool, device=preds_cls.device)
+                
+                results_list.append(empty_dict)
+                continue
+            
+            # Si llegamos aquí, SÍ hay predicciones
+            boxes_pre_nms_pixels = img_preds_box[keep] # [K, 4] (Píxeles)
             scores_pre_nms = scores[keep]     # [K]
             labels_pre_nms = labels[keep]     # [K]
             
-            if boxes_pre_nms.numel() > 0:
-                # Aplicar NMS
-                nms_idx = batched_nms(
-                    boxes_pre_nms,
-                    scores_pre_nms,
-                    labels_pre_nms,
-                    self.nms.min_iou
-                )
+            # Normalizar cajas (0-1) para NMS
+            boxes_pre_nms_norm = boxes_pre_nms_pixels / torch.tensor([W_img, H_img, W_img, H_img], device=boxes_pre_nms_pixels.device)
             
+            # Aplicar NMS
+            nms_idx = batched_nms(
+                boxes_pre_nms_norm,
+                scores_pre_nms,
+                labels_pre_nms,
+                self.nms.min_iou
+            )
+            
+            # Limitar a max_bbox (Esta era la línea que fallaba)
             nms_idx = nms_idx[:self.nms.max_bbox]
 
             # Seleccionar las predicciones finales
-            final_boxes = boxes_pre_nms[nms_idx]   # [N_final, 4]
-            
-            # Normalizar las cajas al rango 0-1 para coincidir con los targets
-            final_boxes = final_boxes / torch.tensor([W_img, H_img, W_img, H_img], device=final_boxes.device)
+            # --- CORRECCIÓN BUG DOBLE-NORMALIZACIÓN ---
+            final_boxes_norm = boxes_pre_nms_norm[nms_idx] # [N_final, 4] (YA ESTÁN 0-1)
             final_scores = scores_pre_nms[nms_idx]   # [N_final]
             final_labels = labels_pre_nms[nms_idx]   # [N_final]
 
@@ -367,7 +379,8 @@ class PostProcess:
                 coeffs_pre_nms = img_coeffs[keep]
                 # Seleccionar coeficientes post-NMS [N_final, M_c]
                 final_coeffs = coeffs_pre_nms[nms_idx]
-
+                
+                final_boxes_pixels = boxes_pre_nms_pixels[nms_idx]
                 # Prototipo para esta imagen [1, M_c, M_h, M_w]
                 img_proto = proto[i].unsqueeze(0) 
                 
@@ -390,27 +403,15 @@ class PostProcess:
                 # Reconstruir las máscaras
                 final_masks = self._reconstruct_masks(
                     final_coeffs,
-                    final_boxes,
+                    final_boxes_pixels, # Pasamos cajas en Píxeles
                     img_proto,
                     img_shape_hw,
                     orig_shape_hw
                 ) # [N_final, H_orig, W_orig] (Bool)
-                
-                # TODO: Escalar 'final_boxes' si usamos rev_tensor
-                if rev_tensor is not None:
-                     # (pred_bbox - rev_tensor[:, None, 1:]) / rev_tensor[:, 0:1, None]
-                     scale = rev_tensor[i, 0]
-                     pad_x = rev_tensor[i, 1]
-                     pad_y = rev_tensor[i, 1] # Asumiendo padding simétrico
-                     # Esta lógica de re-escalado de tu PostProcess original era para V7
-                     # Necesitamos adaptarla.
-                     # Por ahora, nos centramos en las máscaras.
-                     pass
-
-
+            
             # --- 4d. Guardar resultados para esta imagen ---
             results_dict = {
-                "boxes": final_boxes,
+                "boxes": final_boxes_norm, # Cajas (0-1) para la métrica
                 "labels": final_labels,
                 "scores": final_scores,
             }
