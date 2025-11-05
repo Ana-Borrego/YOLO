@@ -323,21 +323,29 @@ class PostProcess:
             # Obtener puntuaciones (confianza * prob_clase)
             scores, labels = img_preds_cls.sigmoid().max(1) # [A_total], [A_total]
             
-            # Filtrar por confianza mínima ANTES de NMS
+            # DEBUG: Imprimir rangos antes de cualquier procesamiento
+            if i == 0:  # Solo para la primera imagen
+                logger.info(f"RAW boxes range: min={img_preds_box.min():.3f}, max={img_preds_box.max():.3f}")
+                logger.info(f"RAW scores range: min={scores.min():.3f}, max={scores.max():.3f}")
+            
+            # Normalizar ANTES del filtrado y NMS
+            img_preds_box = img_preds_box / torch.tensor([W_img, H_img, W_img, H_img], device=img_preds_box.device)
+            
+            # Filtrar por confianza mínima
             keep = scores > self.nms.min_confidence
             
             boxes_pre_nms = img_preds_box[keep] # [K, 4]
             scores_pre_nms = scores[keep]     # [K]
             labels_pre_nms = labels[keep]     # [K]
             
-            # --- 4b. Aplicar NMS (Batched NMS) ---
-            # nms_idx son los índices *relativos* a 'boxes_pre_nms'
-            nms_idx = batched_nms(
-                boxes_pre_nms,
-                scores_pre_nms,
-                labels_pre_nms,
-                self.nms.min_iou
-            )
+            if boxes_pre_nms.numel() > 0:
+                # Aplicar NMS
+                nms_idx = batched_nms(
+                    boxes_pre_nms,
+                    scores_pre_nms,
+                    labels_pre_nms,
+                    self.nms.min_iou
+                )
             
             # Limitar al máximo número de bboxes
             if nms_idx.shape[0] > self.nms.max_bbox:

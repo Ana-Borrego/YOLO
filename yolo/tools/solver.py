@@ -85,12 +85,49 @@ class ValidateModel(BaseModel):
             target_bboxes_flat = targets['bboxes'].to(self.device)
             target_segments_list = targets['segments']
             
-            # Debug de rangos de coordenadas
+            # Debug detallado de predicciones y targets
             if batch_idx == 0:  # Solo para el primer batch
+                logger.info("\n=== DEBUG MÉTRICAS ===")
+                logger.info(f"Batch size: {batch_size}")
+                
+                # Debug predicciones
+                logger.info("\nPREDICCIONES:")
                 for i, pred in enumerate(metrics_pred):
-                    if pred['boxes'].numel() > 0:
-                        logger.info(f"PRED boxes range: min={pred['boxes'].min().item():.3f}, max={pred['boxes'].max().item():.3f}")
-                        logger.info(f"PRED scores range: min={pred['scores'].min().item():.3f}, max={pred['scores'].max().item():.3f}")
+                    logger.info(f"\nPredicción {i}:")
+                    for k, v in pred.items():
+                        if isinstance(v, torch.Tensor):
+                            if v.numel() > 0:
+                                logger.info(f"{k}: shape={v.shape}, dtype={v.dtype}")
+                                logger.info(f"    range: min={v.min().item():.3f}, max={v.max().item():.3f}")
+                                if k == 'boxes':
+                                    logger.info(f"    Primeras 3 cajas: {v[:3].tolist()}")
+                            else:
+                                logger.info(f"{k}: VACÍO (shape={v.shape})")
+                
+                # Debug targets
+                # Primero construimos los targets para debug
+                debug_targets = []
+                for i in range(batch_size):
+                    mask = (target_bboxes_flat[:, 0] == i)
+                    bboxes_for_image = target_bboxes_flat[mask][:, 1:]
+                    debug_dict = {
+                        "boxes": bboxes_for_image[:, 1:],
+                        "labels": bboxes_for_image[:, 0].int()
+                    }
+                    debug_targets.append(debug_dict)
+                
+                logger.info("\nTARGETS:")
+                for i, target in enumerate(debug_targets):
+                    logger.info(f"\nTarget {i}:")
+                    for k, v in target.items():
+                        if isinstance(v, torch.Tensor):
+                            if v.numel() > 0:
+                                logger.info(f"{k}: shape={v.shape}, dtype={v.dtype}")
+                                logger.info(f"    range: min={v.min().item():.3f}, max={v.max().item():.3f}")
+                                if k == 'boxes':
+                                    logger.info(f"    Primeras 3 cajas: {v[:3].tolist()}")
+                            else:
+                                logger.info(f"{k}: VACÍO (shape={v.shape})")
             
             # Obtener índices de inicio para segmentos
             img_indices_in_flat_targets = target_bboxes_flat[:, 0].long()
