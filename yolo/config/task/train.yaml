@@ -23,7 +23,7 @@ data:
 optimizer:
   type: AdamW
   args:
-    lr: 0.01  # Incrementado 10x
+    lr: 0.001  # Incrementado 10x
     weight_decay: 0.005
     # momentum: 0.937
     # nesterov: true
@@ -33,7 +33,7 @@ loss:
     BoxLoss: 7.5
     BCELoss: 0.5
     DFLoss: 1.5
-    MaskLoss: 10.0 
+    MaskLoss: 7.0 
   aux:
     0.25
   matcher:

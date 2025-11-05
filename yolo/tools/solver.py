@@ -109,6 +109,13 @@ class ValidateModel(BaseModel):
                     "masks": gt_masks_tensor.bool()
                 }
                 metrics_target.append(target_dict)
+                
+                # --- INICIO DE CORRECCIÓN DE DDP ---
+                # Contar cuántas predicciones reales se hicieron en este batch
+                num_preds = sum(p['boxes'].shape[0] for p in metrics_pred)
+                if num_preds > 0:
+                    self.preds_found_in_epoch += num_preds
+                # --- FIN DE CORRECCIÓN ---
 
             # Actualizar métricas
             mAP = self.metric(metrics_pred, metrics_target)
@@ -118,6 +125,14 @@ class ValidateModel(BaseModel):
             raise
 
     def on_validation_epoch_end(self):
+        
+        if self.preds_found_in_epoch == 0:
+            logger.info("No se encontraron predicciones en ningún batch de validación. Omitiendo cálculo de mAP.")
+            self.log_dict({"map": 0.0, "map_50": 0.0}, prog_bar=True, sync_dist=True, rank_zero_only=True)
+            self.metric.reset()
+            self.preds_found_in_epoch = 0 # Reiniciar para la próxima época
+            return # Salir de la función
+        
         epoch_metrics = self.metric.compute()
         
         score = [
@@ -148,6 +163,7 @@ class ValidateModel(BaseModel):
             rank_zero_only=True,
         )
         self.metric.reset()
+        self.preds_found_in_epoch = 0
 
 
 class TrainModel(ValidateModel):
