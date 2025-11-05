@@ -312,6 +312,16 @@ class PostProcess:
         batch_size = preds_cls.shape[0]
         results_list = []
 
+        # --- INICIO DE CORRECCIÓN ---
+        # Definir H_orig y W_orig aquí, ANTES del bucle.
+        # Así, el bloque 'if not keep.any():' puede acceder a ellas.
+        # TODO: Implementar lógica de 'rev_tensor' si es necesario
+        if rev_tensor is not None:
+             H_orig, W_orig = int(H_img), int(W_img) # Placeholder
+        else:
+             H_orig, W_orig = int(H_img), int(W_img)
+        orig_shape_hw = (H_orig, W_orig)
+
         for i in range(batch_size):
             # --- 4a. Preparar datos para esta imagen ---
             img_preds_cls = preds_cls[i]       # [A_total, C]

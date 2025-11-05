@@ -174,54 +174,54 @@ class TrainModel(ValidateModel):
         # )
         self.vec2box.update(self.cfg.image_size)
 
-    def on_train_start(self):
-        """Log optimizer info at the start of training (diagnostic)."""
-        try:
-            optimizers = getattr(self.trainer, "optimizers", None)
-            if optimizers and len(optimizers) > 0:
-                opt = optimizers[0]
-                pg = opt.param_groups[0]
-                msg = f"TRAIN START: Optimizer={opt.__class__.__name__}, lr={pg.get('lr')}, weight_decay={pg.get('weight_decay')}, amsgrad={pg.get('amsgrad', None)}"
-                logger.info(msg)
-                # Ensure visible on consoles that may not capture logger
-                print(msg)
-            else:
-                logger.info("TRAIN START: No optimizer found on trainer yet.")
-                print("TRAIN START: No optimizer found on trainer yet.")
-        except Exception:
-            logger.exception("Error logging optimizer info on_train_start")
-            print("Error logging optimizer info on_train_start")
+    # def on_train_start(self):
+    #     """Log optimizer info at the start of training (diagnostic)."""
+    #     try:
+    #         optimizers = getattr(self.trainer, "optimizers", None)
+    #         if optimizers and len(optimizers) > 0:
+    #             opt = optimizers[0]
+    #             pg = opt.param_groups[0]
+    #             msg = f"TRAIN START: Optimizer={opt.__class__.__name__}, lr={pg.get('lr')}, weight_decay={pg.get('weight_decay')}, amsgrad={pg.get('amsgrad', None)}"
+    #             logger.info(msg)
+    #             # Ensure visible on consoles that may not capture logger
+    #             print(msg)
+    #         else:
+    #             logger.info("TRAIN START: No optimizer found on trainer yet.")
+    #             print("TRAIN START: No optimizer found on trainer yet.")
+    #     except Exception:
+    #         logger.exception("Error logging optimizer info on_train_start")
+    #         print("Error logging optimizer info on_train_start")
 
-    def on_after_backward(self):
-        """Light-weight gradient diagnostics after backward (diagnostic)."""
-        try:
-            total_params = 0
-            params_with_grad = 0
-            max_grad = 0.0
-            mean_grad = 0.0
-            cnt = 0
-            for p in self.model.parameters():
-                total_params += 1
-                if p.grad is not None:
-                    params_with_grad += 1
-                    g = p.grad.detach()
-                    try:
-                        max_g = float(g.abs().max().item())
-                        mean_g = float(g.abs().mean().item())
-                    except Exception:
-                        max_g = 0.0
-                        mean_g = 0.0
-                    if max_g > max_grad:
-                        max_grad = max_g
-                    mean_grad += mean_g
-                    cnt += 1
-            mean_grad = (mean_grad / cnt) if cnt > 0 else 0.0
-            msg = f"AFTER_BACKWARD: params_with_grad={params_with_grad}/{total_params}, max_grad={max_grad:.6g}, mean_grad={mean_grad:.6g}"
-            logger.info(msg)
-            print(msg)
-        except Exception:
-            logger.exception("Error computing gradient stats in on_after_backward")
-            print("Error computing gradient stats in on_after_backward")
+    # def on_after_backward(self):
+    #     """Light-weight gradient diagnostics after backward (diagnostic)."""
+    #     try:
+    #         total_params = 0
+    #         params_with_grad = 0
+    #         max_grad = 0.0
+    #         mean_grad = 0.0
+    #         cnt = 0
+    #         for p in self.model.parameters():
+    #             total_params += 1
+    #             if p.grad is not None:
+    #                 params_with_grad += 1
+    #                 g = p.grad.detach()
+    #                 try:
+    #                     max_g = float(g.abs().max().item())
+    #                     mean_g = float(g.abs().mean().item())
+    #                 except Exception:
+    #                     max_g = 0.0
+    #                     mean_g = 0.0
+    #                 if max_g > max_grad:
+    #                     max_grad = max_g
+    #                 mean_grad += mean_g
+    #                 cnt += 1
+    #         mean_grad = (mean_grad / cnt) if cnt > 0 else 0.0
+    #         msg = f"AFTER_BACKWARD: params_with_grad={params_with_grad}/{total_params}, max_grad={max_grad:.6g}, mean_grad={mean_grad:.6g}"
+    #         logger.info(msg)
+    #         print(msg)
+    #     except Exception:
+    #         logger.exception("Error computing gradient stats in on_after_backward")
+    #         print("Error computing gradient stats in on_after_backward")
 
     def training_step(self, batch, batch_idx):
         # lr_dict = self.trainer.optimizers[0].next_batch() # type: ignore
