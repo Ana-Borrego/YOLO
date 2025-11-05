@@ -10,5 +10,5 @@ data:
   dynamic_shape: False
 nms:
   min_confidence: 0.0001
-  min_iou: 0.7
+  min_iou: 0.5
   max_bbox: 1000
