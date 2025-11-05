@@ -44,13 +44,12 @@ loss:
       cls: 0.5
 
 scheduler:
-  type: LinearLR
+  type: CosineAnnealingLR
   warmup:
     epochs: 3.0
   args:
-    total_iters: ${task.epoch}
-    start_factor: 1
-    end_factor: 0.01
+    T_max: ${task.epoch}
+    eta_min: 0.00001
 
 ema:
   enable: false
