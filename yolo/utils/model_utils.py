@@ -347,9 +347,7 @@ class PostProcess:
                     self.nms.min_iou
                 )
             
-            # Limitar al máximo número de bboxes
-            if nms_idx.shape[0] > self.nms.max_bbox:
-                nms_idx = nms_idx[:self.nms.max_bbox]
+            nms_idx = nms_idx[:self.nms.max_bbox]
 
             # Seleccionar las predicciones finales
             final_boxes = boxes_pre_nms[nms_idx]   # [N_final, 4]
