@@ -30,10 +30,10 @@ optimizer:
 
 loss:
   objective:
-    BoxLoss: 7.0
+    BoxLoss: 7.5
     BCELoss: 0.5
     DFLoss: 1.5
-    MaskLoss: 1.0  # Reducido para balancear con otras pérdidas
+    MaskLoss: 10.0 
   aux:
     0.25
   matcher:

@@ -31,7 +31,7 @@ class BoxLoss(nn.Module):
         self, predicts_bbox: Tensor, targets_bbox: Tensor, valid_masks: Tensor, box_norm: Tensor, cls_norm: Tensor
     ) -> Any:
         # predicts_bbox y targets_bbox ya están en formato xyxy
-        valid_bbox_mask = valid_masks[..., None].expand(-1, -1, 4) # Crear máscara [B, A, 4]
+        
         # Seleccionar solo las cajas válidas
         picked_predict = predicts_bbox[valid_masks] # [N_valid, 4]
         picked_targets = targets_bbox[valid_masks] # [N_valid, 4]
@@ -39,17 +39,18 @@ class BoxLoss(nn.Module):
         if picked_predict.numel() == 0:
             return torch.tensor(0.0, device=predicts_bbox.device)
 
-        # Calcular IoU diagonalmente (cada predicción con su target asignado)
-        # iou = calculate_iou(picked_predict.unsqueeze(1), picked_targets.unsqueeze(0), "ciou") # (3D)
-        iou = calculate_iou(picked_predict, picked_targets, "ciou") # [N_valid, N_valid] (2D)
-        iou_diag = torch.diag(iou).clamp(0, 1) # Asegurar que esté en [0, 1]
+        # Calcular IoU (matriz [N_valid, N_valid])
+        iou = calculate_iou(picked_predict, picked_targets, "ciou")
+        
+        # Extraer la diagonal (pares [pred_i, target_i])
+        iou_diag = torch.diag(iou) # ¡MODIFICADO! Se eliminó .clamp(0, 1)
 
-        loss_iou = 1.0 - iou_diag
+        loss_iou = 1.0 - iou_diag # [N_valid]
 
-        # box_norm debería tener tamaño [N_valid] si se calcula correctamente
+        # Lógica de ponderación original (asumiendo que box_norm es [N_valid])
         if box_norm.shape[0] != loss_iou.shape[0]:
+            # Este log es útil, lo mantenemos por si acaso
             logger.warning(f"Box norm shape mismatch: {box_norm.shape} vs loss_iou shape: {loss_iou.shape}. Using mean.")
-            # Fallback si box_norm no tiene el tamaño correcto
             loss_iou_weighted = loss_iou.mean()
         else:
              loss_iou_weighted = (loss_iou * box_norm).sum() / cls_norm
