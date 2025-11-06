@@ -59,6 +59,7 @@ class ValidateModel(BaseModel):
             self.iou_type = "bbox"
 
         # Inicializar la métrica aquí
+        logger.info(f"Initializing MeanAveragePrecision with iou_type='{self.iou_type}'")
         self.metric = MeanAveragePrecision(iou_type=self.iou_type, box_format="xyxy", backend="faster_coco_eval")
         self.metric.warn_on_many_detections = False
     
@@ -143,26 +144,26 @@ class ValidateModel(BaseModel):
 
             # Actualizar métricas
             # --- DEBUG DE VALIDACION --- #
-            for i, (pred, tgt) in enumerate(zip(metrics_pred, metrics_target)):
-                logger.info(f"--- IMAGE {i} ---")
-                # Preds
-                logger.info(
-                    f"PRED boxes: {pred['boxes'].shape}, min={pred['boxes'].min().item() if pred['boxes'].numel()>0 else None}, "
-                    f"max={pred['boxes'].max().item() if pred['boxes'].numel()>0 else None}, "
-                    f"labels: {pred['labels'].cpu().numpy()[:8] if pred['labels'].numel()>0 else None}, "
-                    f"scores: {pred['scores'].cpu().numpy()[:8] if 'scores' in pred and pred['scores'].numel()>0 else None}"
-                )
-                msk = pred.get('masks', None)
-                if msk is not None and msk.numel() > 0:
-                    logger.info(f"PRED masks: {msk.shape}, dtype={msk.dtype}, unique={torch.unique(msk).cpu().numpy()}")
-                # GT
-                logger.info(
-                    f"GT boxes: {tgt['boxes'].shape}, labels: {tgt['labels'].cpu().numpy()[:8] if tgt['labels'].numel()>0 else None}"
-                )
-                msk_gt = tgt.get('masks', None)
-                if msk_gt is not None and msk_gt.numel() > 0:
-                    logger.info(f"GT masks: {msk_gt.shape}, dtype={msk_gt.dtype}, unique={torch.unique(msk_gt).cpu().numpy()}")
-            # --- FIN DEBUG --- #
+            # for i, (pred, tgt) in enumerate(zip(metrics_pred, metrics_target)):
+            #     logger.info(f"--- IMAGE {i} ---")
+            #     # Preds
+            #     logger.info(
+            #         f"PRED boxes: {pred['boxes'].shape}, min={pred['boxes'].min().item() if pred['boxes'].numel()>0 else None}, "
+            #         f"max={pred['boxes'].max().item() if pred['boxes'].numel()>0 else None}, "
+            #         f"labels: {pred['labels'].cpu().numpy()[:8] if pred['labels'].numel()>0 else None}, "
+            #         f"scores: {pred['scores'].cpu().numpy()[:8] if 'scores' in pred and pred['scores'].numel()>0 else None}"
+            #     )
+            #     msk = pred.get('masks', None)
+            #     if msk is not None and msk.numel() > 0:
+            #         logger.info(f"PRED masks: {msk.shape}, dtype={msk.dtype}, unique={torch.unique(msk).cpu().numpy()}")
+            #     # GT
+            #     logger.info(
+            #         f"GT boxes: {tgt['boxes'].shape}, labels: {tgt['labels'].cpu().numpy()[:8] if tgt['labels'].numel()>0 else None}"
+            #     )
+            #     msk_gt = tgt.get('masks', None)
+            #     if msk_gt is not None and msk_gt.numel() > 0:
+            #         logger.info(f"GT masks: {msk_gt.shape}, dtype={msk_gt.dtype}, unique={torch.unique(msk_gt).cpu().numpy()}")
+            # # --- FIN DEBUG --- #
             mAP = self.metric(metrics_pred, metrics_target)
             
         except Exception as e:
@@ -177,9 +178,9 @@ class ValidateModel(BaseModel):
             self.metric.reset()
             self.preds_found_in_epoch = 0 # Reiniciar para la próxima época
             return # Salir de la función
-        
+        logger.info("Calculando metricas de final de epoca")
         epoch_metrics = self.metric.compute()
-        
+        logger.info("Metricas computadas")
         logger.info(f"Epoch {self.current_epoch} Validation Metrics Computed: {epoch_metrics}")
         
         score = [
