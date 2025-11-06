@@ -164,6 +164,59 @@ class ValidateModel(BaseModel):
             #     if msk_gt is not None and msk_gt.numel() > 0:
             #         logger.info(f"GT masks: {msk_gt.shape}, dtype={msk_gt.dtype}, unique={torch.unique(msk_gt).cpu().numpy()}")
             # # --- FIN DEBUG --- #
+            
+            # DEBUG MAS DETALLADO # 
+            debug_done = False
+            for i in range(batch_size):
+                if debug_done: break
+                
+                p_boxes = metrics_pred[i]['boxes']
+                g_boxes = metrics_target[i]['boxes']
+                
+                if p_boxes.shape[0] > 0 and g_boxes.shape[0] > 0:
+                    logger.info(f"\n🔍 --- DEBUG DEEP DIVE (Img {i} en batch {batch_idx}) ---")
+                    
+                    # 1. Verificar Coincidencia de Clases
+                    p_labels = metrics_pred[i]['labels'].cpu().unique().numpy()
+                    g_labels = metrics_target[i]['labels'].cpu().unique().numpy()
+                    common_labels = np.intersect1d(p_labels, g_labels)
+                    logger.info(f"🏷️ Clases PRED: {p_labels} | Clases GT: {g_labels}")
+                    if len(common_labels) == 0:
+                        logger.warning("⚠️ ¡NO HAY CLASES EN COMÚN! El mAP será 0 para esta imagen independientemente del solapamiento.")
+                    else:
+                        logger.info(f"✅ Clases en común: {common_labels}")
+
+                    # 2. Verificar Rangos de Scores
+                    scores = metrics_pred[i]['scores']
+                    logger.info(f"📊 Scores PRED: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
+
+                    # 3. Verificar Superposición Rápida de Cajas (Bounding Box Overlap)
+                    # Tomamos la mejor predicción (mayor score) y vemos si toca alguna caja GT
+                    best_idx = torch.argmax(scores)
+                    best_box = p_boxes[best_idx]
+                    
+                    # Calculamos IoU rápido de esta caja contra todas las GT
+                    # (x1, y1, x2, y2)
+                    ix1 = torch.max(best_box[0], g_boxes[:, 0])
+                    iy1 = torch.max(best_box[1], g_boxes[:, 1])
+                    ix2 = torch.min(best_box[2], g_boxes[:, 2])
+                    iy2 = torch.min(best_box[3], g_boxes[:, 3])
+                    inter_area = (ix2 - ix1).clamp(min=0) * (iy2 - iy1).clamp(min=0)
+                    
+                    # Si alguna inter_area > 0, hay superposición física
+                    if inter_area.sum() > 0:
+                        max_overlap_val = inter_area.max().item()
+                        logger.info(f"✅ La mejor predicción (score {scores[best_idx]:.4f}) se solapa físicamente con algún GT (max intersection area: {max_overlap_val:.1f})")
+                        logger.info(f"   Best Pred Box: {best_box.cpu().numpy()}")
+                        # Encuentra con cuál se solapa más
+                        gt_idx = torch.argmax(inter_area)
+                        logger.info(f"   Closest GT Box: {g_boxes[gt_idx].cpu().numpy()}")
+                    else:
+                        logger.warning("⚠️ La mejor predicción NO toca ninguna caja GT. Revisa las coordenadas.")
+                        logger.info(f"   Best Pred Box (aislada): {best_box.cpu().numpy()}")
+
+                    debug_done = True # Solo una imagen por batch para no saturar
+            
             mAP = self.metric(metrics_pred, metrics_target)
             
         except Exception as e:
