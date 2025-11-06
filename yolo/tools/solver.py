@@ -86,7 +86,17 @@ class ValidateModel(BaseModel):
             predicts = self.post_process(model_output, image_size=[W, H])
             
             # Preparar predicciones para métricas
-            metrics_pred = [to_metrics_format(predict) for predict in predicts]
+            metrics_pred = []
+            for predict in predicts:
+                mp = to_metrics_format(predict)
+                
+                ### NUEVO: DESNORMALIZAR PREDICCIONES ###
+                # Si las cajas están normalizadas (valores pequeños <= 1.0), las pasamos a píxeles (0-640)
+                if mp['boxes'].numel() > 0 and mp['boxes'].max() <= 1.01:
+                     mp['boxes'][:, [0, 2]] *= W
+                     mp['boxes'][:, [1, 3]] *= H
+                metrics_pred.append(mp)
+                                ### FIN NUEVO ###
             
             # Preparar targets para métricas
             target_bboxes_flat = targets['bboxes'].to(self.device)
@@ -108,10 +118,17 @@ class ValidateModel(BaseModel):
                 start_idx = start_indices[i]
                 segments_for_image = target_segments_list[start_idx : start_idx + num_gts]
                 gt_masks_tensor = polygons_to_masks(segments_for_image, H, W).to(self.device) if num_gts > 0 else torch.empty(0, H, W, device=self.device)
-
+                
+                ### NUEVO: DESNORMALIZAR GROUND TRUTH (TARGETS) ###
+                gt_boxes = bboxes_for_image[:, 1:].clone() # Copiamos para no afectar a otros procesos
+                # Si tus TXT tienen valores entre 0 y 1, esto los pasará a 0-640
+                if gt_boxes.numel() > 0 and gt_boxes.max() <= 1.01:
+                    gt_boxes[:, [0, 2]] *= W
+                    gt_boxes[:, [1, 3]] *= H
+                
                 # Construir diccionario target
                 target_dict = {
-                    "boxes": bboxes_for_image[:, 1:],
+                    "boxes": gt_boxes,
                     "labels": bboxes_for_image[:, 0].int(),
                     "masks": gt_masks_tensor.bool()
                 }
