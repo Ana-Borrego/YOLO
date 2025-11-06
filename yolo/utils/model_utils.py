@@ -346,6 +346,7 @@ class PostProcess:
             img_preds_box = preds_box_xyxy[i]  # [A_total, 4]
             
             # Obtener puntuaciones (confianza * prob_clase)
+            logger.info(f"Max logits: {img_preds_cls.max().item()}, min logits: {img_preds_cls.min().item()}, mean logits: {img_preds_cls.mean().item()}")
             scores, labels = img_preds_cls.sigmoid().max(1) # [A_total], [A_total]
             
             # DEBUG: Imprimir rangos antes de cualquier procesamiento
