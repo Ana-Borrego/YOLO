@@ -163,6 +163,8 @@ class ValidateModel(BaseModel):
         
         epoch_metrics = self.metric.compute()
         
+        logger.info(f"Epoch {self.current_epoch} Validation Metrics Computed: {epoch_metrics}")
+        
         score = [
             epoch_metrics.get('map', 0.0),
             epoch_metrics.get('map_50', 0.0),
