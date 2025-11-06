@@ -228,10 +228,8 @@ class PostProcess:
         H_orig, W_orig = orig_shape_hw
         M_h, M_w = proto.shape[-2:]
         
-        # ---- INICIO DE CORRECCIÓN DE OOM ----
         # Definimos un tamaño de chunk para no desbordar la VRAM
         chunk_size = 256
-        # ---- FIN DE CORRECCIÓN DE OOM ----
 
         if pred_coeffs.numel() == 0:
             return torch.empty(0, H_orig, W_orig, dtype=torch.bool, device=proto.device)
@@ -268,7 +266,6 @@ class PostProcess:
             masks_upscaled = torch.cat(masks_upscaled_list, dim=0) # [N, H_orig, W_orig]
         else:
             return torch.empty(0, H_orig, W_orig, dtype=torch.bool, device=proto.device)
-        # ---- FIN DE CORRECCIÓN DE OOM ----
         
         # 4. Binarizar
         # Aplicamos sigmoide (porque teníamos logits) y un umbral
@@ -356,9 +353,6 @@ class PostProcess:
                 logger.info(f"RAW boxes range: min={img_preds_box.min():.3f}, max={img_preds_box.max():.3f}")
                 logger.info(f"RAW scores range: min={scores.min():.3f}, max={scores.max():.3f}")
             
-            # Normalizar ANTES del filtrado y NMS
-            img_preds_box = img_preds_box / torch.tensor([W_img, H_img, W_img, H_img], device=img_preds_box.device)
-            
             # Filtrar por confianza mínima
             keep = scores > self.nms.min_confidence
             
@@ -373,6 +367,7 @@ class PostProcess:
                     empty_dict["masks"] = torch.empty(0, H_orig, W_orig, dtype=torch.bool, device=preds_cls.device)
                 
                 results_list.append(empty_dict)
+                logger.info("No hay predicciones.")
                 continue
             
             # Si llegamos aquí, SÍ hay predicciones
@@ -395,8 +390,7 @@ class PostProcess:
             nms_idx = nms_idx[:self.nms.max_bbox]
 
             # Seleccionar las predicciones finales
-            # --- CORRECCIÓN BUG DOBLE-NORMALIZACIÓN ---
-            final_boxes_norm = boxes_pre_nms_norm[nms_idx] # [N_final, 4] (YA ESTÁN 0-1)
+            final_boxes_norm = boxes_pre_nms_pixels[nms_idx] # [N_final, 4] (YA ESTÁN 0-1)
             final_scores = scores_pre_nms[nms_idx]   # [N_final]
             final_labels = labels_pre_nms[nms_idx]   # [N_final]
 
@@ -420,12 +414,7 @@ class PostProcess:
                 
                 # Obtener forma original (si rev_tensor está disponible)
                 if rev_tensor is not None:
-                    # rev_tensor [B, 5] (scale, pad_x, pad_y, W_orig, H_orig)
-                    # Asumiendo que rev_tensor tiene [scale, padW, padH, orig_W, orig_H]
-                    # ¡¡CUIDADO!! El rev_tensor de tu data_loader puede ser diferente.
-                    # Asumamos por ahora que la forma original es la misma que la de entrada
-                    # TODO: Corregir esto si el data_loader escala y centra (letterbox)
-                    H_orig, W_orig = int(H_img), int(W_img) # TODO: Usar rev_tensor
+                    H_orig, W_orig = int(H_img), int(W_img) 
                 else:
                     H_orig, W_orig = int(H_img), int(W_img)
 
@@ -448,7 +437,7 @@ class PostProcess:
             }
             if is_segmentation:
                 results_dict["masks"] = final_masks
-
+            logger.info(f"Results dict final: {results_dict}")
             results_list.append(results_dict)
 
         # Devolvemos una lista de diccionarios
@@ -479,19 +468,7 @@ def predicts_to_json(img_paths, predicts, rev_tensor):
     """
     TODO: function document
     turn a batch of imagepath and predicts(n x 6 for each image) to a List of diction(Detection output)
-    """
-    batch_json = []
-    for img_path, bboxes, box_reverse in zip(img_paths, predicts, rev_tensor):
-        scale, shift = box_reverse.split([1, 4])
-        bboxes = bboxes.clone()
-        bboxes[:, 1:5] = (bboxes[:, 1:5] - shift[None]) / scale[None]
-        bboxes[:, 1:5] = transform_bbox(bboxes[:, 1:5], "xyxy -> xywh")
-        for cls, *pos, conf in bboxes:
-            bbox = {
-                "image_id": int(Path(img_path).stem),
-                "category_id": IDX_TO_ID[int(cls)],
-                "bbox": [float(p) for p in pos],
-                "score": float(conf),
-            }
             batch_json.append(bbox)
     return batch_json
+        scale, shift = box_reverse.split([1, 4])
+            }
