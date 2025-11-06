@@ -68,7 +68,11 @@ class ValidateModel(BaseModel):
         """Se llama al inicio de cada época de validación."""
         # Inicializa el contador de predicciones en el dispositivo correcto.
         self.preds_found_in_epoch = torch.tensor(0, dtype=torch.long, device=self.device)
-    # --- FIN DE LA NUEVA FUNCIÓN ---
+        self.stat_total_img = 0
+        self.stat_img_with_pred = 0
+        self.stat_img_with_gt = 0
+        self.stat_img_shared_class = 0
+        self.stat_cum_max_iou = 0.0 # Suma del mejor IoU de cada imagen
         
     def val_dataloader(self):
         return self.val_loader
@@ -135,6 +139,43 @@ class ValidateModel(BaseModel):
                 }
                 metrics_target.append(target_dict)
                 
+                # --- INICIO ACUMULACIÓN DE EVIDENCIAS ---
+                self.stat_total_img += 1
+                p_boxes = metrics_pred[i]['boxes']
+                g_boxes = target_dict['boxes']
+                
+                has_pred = p_boxes.shape[0] > 0
+                has_gt = g_boxes.shape[0] > 0
+                
+                if has_pred: self.stat_img_with_pred += 1
+                if has_gt: self.stat_img_with_gt += 1
+                
+                if has_pred and has_gt:
+                    # 1. Chequeo de Clases
+                    p_labels = metrics_pred[i]['labels'].cpu().unique().numpy()
+                    g_labels = target_dict['labels'].cpu().unique().numpy()
+                    if len(np.intersect1d(p_labels, g_labels)) > 0:
+                        self.stat_img_shared_class += 1
+                        
+                    # 2. Chequeo de IoU Físico (Cajas)
+                    # Calcula matriz de IoU entre todas las preds y todos los GT de esta imagen
+                    ix1 = torch.max(p_boxes[:, None, 0], g_boxes[:, 0])
+                    iy1 = torch.max(p_boxes[:, None, 1], g_boxes[:, 1])
+                    ix2 = torch.min(p_boxes[:, None, 2], g_boxes[:, 2])
+                    iy2 = torch.min(p_boxes[:, None, 3], g_boxes[:, 3])
+                    inter_area = (ix2 - ix1).clamp(min=0) * (iy2 - iy1).clamp(min=0)
+                    
+                    p_area = (p_boxes[:, 2] - p_boxes[:, 0]) * (p_boxes[:, 3] - p_boxes[:, 1])
+                    g_area = (g_boxes[:, 2] - g_boxes[:, 0]) * (g_boxes[:, 3] - g_boxes[:, 1])
+                    union_area = p_area[:, None] + g_area - inter_area
+                    
+                    iou_matrix = inter_area / (union_area + 1e-6)
+                    
+                    # Guardamos el MEJOR IoU que logró cualquier predicción en esta imagen
+                    if iou_matrix.numel() > 0:
+                        self.stat_cum_max_iou += iou_matrix.max().item()
+                # --- FIN ACUMULACIÓN ---
+                
                 # --- INICIO DE CORRECCIÓN DE DDP ---
                 # Contar cuántas predicciones reales se hicieron en este batch
                 num_preds = sum(p['boxes'].shape[0] for p in metrics_pred)
@@ -166,56 +207,56 @@ class ValidateModel(BaseModel):
             # # --- FIN DEBUG --- #
             
             # DEBUG MAS DETALLADO # 
-            debug_done = False
-            for i in range(batch_size):
-                if debug_done: break
+            # debug_done = False
+            # for i in range(batch_size):
+            #     if debug_done: break
                 
-                p_boxes = metrics_pred[i]['boxes']
-                g_boxes = metrics_target[i]['boxes']
+            #     p_boxes = metrics_pred[i]['boxes']
+            #     g_boxes = metrics_target[i]['boxes']
                 
-                if p_boxes.shape[0] > 0 and g_boxes.shape[0] > 0:
-                    logger.info(f"\n🔍 --- DEBUG DEEP DIVE (Img {i} en batch {batch_idx}) ---")
+            #     if p_boxes.shape[0] > 0 and g_boxes.shape[0] > 0:
+            #         logger.info(f"\n🔍 --- DEBUG DEEP DIVE (Img {i} en batch {batch_idx}) ---")
                     
-                    # 1. Verificar Coincidencia de Clases
-                    p_labels = metrics_pred[i]['labels'].cpu().unique().numpy()
-                    g_labels = metrics_target[i]['labels'].cpu().unique().numpy()
-                    common_labels = np.intersect1d(p_labels, g_labels)
-                    logger.info(f"🏷️ Clases PRED: {p_labels} | Clases GT: {g_labels}")
-                    if len(common_labels) == 0:
-                        logger.warning("⚠️ ¡NO HAY CLASES EN COMÚN! El mAP será 0 para esta imagen independientemente del solapamiento.")
-                    else:
-                        logger.info(f"✅ Clases en común: {common_labels}")
+            #         # 1. Verificar Coincidencia de Clases
+            #         p_labels = metrics_pred[i]['labels'].cpu().unique().numpy()
+            #         g_labels = metrics_target[i]['labels'].cpu().unique().numpy()
+            #         common_labels = np.intersect1d(p_labels, g_labels)
+            #         logger.info(f"🏷️ Clases PRED: {p_labels} | Clases GT: {g_labels}")
+            #         if len(common_labels) == 0:
+            #             logger.warning("⚠️ ¡NO HAY CLASES EN COMÚN! El mAP será 0 para esta imagen independientemente del solapamiento.")
+            #         else:
+            #             logger.info(f"✅ Clases en común: {common_labels}")
 
-                    # 2. Verificar Rangos de Scores
-                    scores = metrics_pred[i]['scores']
-                    logger.info(f"📊 Scores PRED: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
+            #         # 2. Verificar Rangos de Scores
+            #         scores = metrics_pred[i]['scores']
+            #         logger.info(f"📊 Scores PRED: min={scores.min():.4f}, max={scores.max():.4f}, mean={scores.mean():.4f}")
 
-                    # 3. Verificar Superposición Rápida de Cajas (Bounding Box Overlap)
-                    # Tomamos la mejor predicción (mayor score) y vemos si toca alguna caja GT
-                    best_idx = torch.argmax(scores)
-                    best_box = p_boxes[best_idx]
+            #         # 3. Verificar Superposición Rápida de Cajas (Bounding Box Overlap)
+            #         # Tomamos la mejor predicción (mayor score) y vemos si toca alguna caja GT
+            #         best_idx = torch.argmax(scores)
+            #         best_box = p_boxes[best_idx]
                     
-                    # Calculamos IoU rápido de esta caja contra todas las GT
-                    # (x1, y1, x2, y2)
-                    ix1 = torch.max(best_box[0], g_boxes[:, 0])
-                    iy1 = torch.max(best_box[1], g_boxes[:, 1])
-                    ix2 = torch.min(best_box[2], g_boxes[:, 2])
-                    iy2 = torch.min(best_box[3], g_boxes[:, 3])
-                    inter_area = (ix2 - ix1).clamp(min=0) * (iy2 - iy1).clamp(min=0)
+            #         # Calculamos IoU rápido de esta caja contra todas las GT
+            #         # (x1, y1, x2, y2)
+            #         ix1 = torch.max(best_box[0], g_boxes[:, 0])
+            #         iy1 = torch.max(best_box[1], g_boxes[:, 1])
+            #         ix2 = torch.min(best_box[2], g_boxes[:, 2])
+            #         iy2 = torch.min(best_box[3], g_boxes[:, 3])
+            #         inter_area = (ix2 - ix1).clamp(min=0) * (iy2 - iy1).clamp(min=0)
                     
-                    # Si alguna inter_area > 0, hay superposición física
-                    if inter_area.sum() > 0:
-                        max_overlap_val = inter_area.max().item()
-                        logger.info(f"✅ La mejor predicción (score {scores[best_idx]:.4f}) se solapa físicamente con algún GT (max intersection area: {max_overlap_val:.1f})")
-                        logger.info(f"   Best Pred Box: {best_box.cpu().numpy()}")
-                        # Encuentra con cuál se solapa más
-                        gt_idx = torch.argmax(inter_area)
-                        logger.info(f"   Closest GT Box: {g_boxes[gt_idx].cpu().numpy()}")
-                    else:
-                        logger.warning("⚠️ La mejor predicción NO toca ninguna caja GT. Revisa las coordenadas.")
-                        logger.info(f"   Best Pred Box (aislada): {best_box.cpu().numpy()}")
+            #         # Si alguna inter_area > 0, hay superposición física
+            #         if inter_area.sum() > 0:
+            #             max_overlap_val = inter_area.max().item()
+            #             logger.info(f"✅ La mejor predicción (score {scores[best_idx]:.4f}) se solapa físicamente con algún GT (max intersection area: {max_overlap_val:.1f})")
+            #             logger.info(f"   Best Pred Box: {best_box.cpu().numpy()}")
+            #             # Encuentra con cuál se solapa más
+            #             gt_idx = torch.argmax(inter_area)
+            #             logger.info(f"   Closest GT Box: {g_boxes[gt_idx].cpu().numpy()}")
+            #         else:
+            #             logger.warning("⚠️ La mejor predicción NO toca ninguna caja GT. Revisa las coordenadas.")
+            #             logger.info(f"   Best Pred Box (aislada): {best_box.cpu().numpy()}")
 
-                    debug_done = True # Solo una imagen por batch para no saturar
+            #         debug_done = True # Solo una imagen por batch para no saturar
             
             mAP = self.metric(metrics_pred, metrics_target)
             
@@ -224,6 +265,26 @@ class ValidateModel(BaseModel):
             raise
 
     def on_validation_epoch_end(self):
+        
+        # --- INFORME DE DIAGNÓSTICO ---
+        avg_iou = self.stat_cum_max_iou / self.stat_total_img if self.stat_total_img > 0 else 0
+        logger.info("\n📊 === REPORTE DE EVIDENCIAS DE VALIDACIÓN ===")
+        logger.info(f"Imágenes Analizadas: {self.stat_total_img}")
+        logger.info(f"Imágenes con al menos 1 Predicción (tras filtro): {self.stat_img_with_pred}")
+        logger.info(f"Imágenes con Ground Truth: {self.stat_img_with_gt}")
+        logger.info(f"Imágenes con Coincidencia de CLASE (Pred vs GT): {self.stat_img_shared_class}")
+        logger.info(f"IoU Máximo Promedio (¿Se tocan las cajas?): {avg_iou:.4f}")
+        
+        if self.stat_img_with_pred == 0:
+            logger.warning("⚠️ DIAGNÓSTICO: El modelo NO está prediciendo nada. Revisa umbral de confianza o si el entrenamiento colapsó.")
+        elif self.stat_img_shared_class == 0:
+            logger.warning("⚠️ DIAGNÓSTICO: El modelo predice, pero NINGUNA clase coincide con el GT. Revisa el mapeo de clases.")
+        elif avg_iou < 0.01:
+            logger.warning("⚠️ DIAGNÓSTICO: Las cajas predichas NO SE TOCAN con las reales. Problema grave de coordenadas (¿normalización?).")
+        else:
+            logger.info("✅ DIAGNÓSTICO: Hay superposición física y coincidencia de clases. Si mAP es 0, podría ser por scores muy bajos.")
+        logger.info("===========================================\n")
+        # -----------------------------
         
         if self.preds_found_in_epoch == 0:
             logger.info("No se encontraron predicciones en ningún batch de validación. Omitiendo cálculo de mAP.")
