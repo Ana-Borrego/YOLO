@@ -391,7 +391,7 @@ class PostProcess:
             nms_idx = nms_idx[:self.nms.max_bbox]
 
             # Seleccionar las predicciones finales
-            final_boxes_norm = boxes_pre_nms_pixels[nms_idx] # [N_final, 4] (YA ESTÁN 0-1)
+            final_boxes_norm = boxes_pre_nms_norm[nms_idx] # [N_final, 4] (YA ESTÁN 0-1)
             final_scores = scores_pre_nms[nms_idx]   # [N_final]
             final_labels = labels_pre_nms[nms_idx]   # [N_final]
 

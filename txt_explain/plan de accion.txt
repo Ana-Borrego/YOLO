@@ -410,10 +410,6 @@ DEBUG: Check rápido del modelo raw outputs (si mAp=0 y pérdidas no cero):
 				logger.info(f"layer shape: {[t.shape for t in layer]}")
 		-> Confirmar que logits no sean todos -inf/-large negative.
 
-QUE BUSCAR EN LOS DEBUGS: 
-	boxes.shape = (N,4) with N>0. If N==0 repeatedly -> problem upstream.
-	scores.max() near 1 or at least >0.1. If ~0 -> model not predicting.
-	keep.sum() equals 0 -> min_confidence filter removed everything.
-	boxes min/max outside [0, W] / [0,H] or NaN. 
+PROBLEMA CRÍTICO: Tras 50 épocas no se calculan las métricas en validación. 
 
 
