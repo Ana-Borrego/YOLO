@@ -125,6 +125,27 @@ class ValidateModel(BaseModel):
                 # --- FIN DE CORRECCIÓN ---
 
             # Actualizar métricas
+            # --- DEBUG DE VALIDACION --- #
+            for i, (pred, tgt) in enumerate(zip(metrics_pred, metrics_target)):
+                logger.info(f"--- IMAGE {i} ---")
+                # Preds
+                logger.info(
+                    f"PRED boxes: {pred['boxes'].shape}, min={pred['boxes'].min().item() if pred['boxes'].numel()>0 else None}, "
+                    f"max={pred['boxes'].max().item() if pred['boxes'].numel()>0 else None}, "
+                    f"labels: {pred['labels'].cpu().numpy()[:8] if pred['labels'].numel()>0 else None}, "
+                    f"scores: {pred['scores'].cpu().numpy()[:8] if 'scores' in pred and pred['scores'].numel()>0 else None}"
+                )
+                msk = pred.get('masks', None)
+                if msk is not None and msk.numel() > 0:
+                    logger.info(f"PRED masks: {msk.shape}, dtype={msk.dtype}, unique={torch.unique(msk).cpu().numpy()}")
+                # GT
+                logger.info(
+                    f"GT boxes: {tgt['boxes'].shape}, labels: {tgt['labels'].cpu().numpy()[:8] if tgt['labels'].numel()>0 else None}"
+                )
+                msk_gt = tgt.get('masks', None)
+                if msk_gt is not None and msk_gt.numel() > 0:
+                    logger.info(f"GT masks: {msk_gt.shape}, dtype={msk_gt.dtype}, unique={torch.unique(msk_gt).cpu().numpy()}")
+            # --- FIN DEBUG --- #
             mAP = self.metric(metrics_pred, metrics_target)
             
         except Exception as e:

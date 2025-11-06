@@ -346,13 +346,13 @@ class PostProcess:
             img_preds_box = preds_box_xyxy[i]  # [A_total, 4]
             
             # Obtener puntuaciones (confianza * prob_clase)
-            logger.info(f"Max logits: {img_preds_cls.max().item()}, min logits: {img_preds_cls.min().item()}, mean logits: {img_preds_cls.mean().item()}")
+            # logger.info(f"Max logits: {img_preds_cls.max().item()}, min logits: {img_preds_cls.min().item()}, mean logits: {img_preds_cls.mean().item()}")
             scores, labels = img_preds_cls.sigmoid().max(1) # [A_total], [A_total]
             
-            # DEBUG: Imprimir rangos antes de cualquier procesamiento
-            if i == 0:  # Solo para la primera imagen
-                logger.info(f"RAW boxes range: min={img_preds_box.min():.3f}, max={img_preds_box.max():.3f}")
-                logger.info(f"RAW scores range: min={scores.min():.3f}, max={scores.max():.3f}")
+            # # DEBUG: Imprimir rangos antes de cualquier procesamiento
+            # if i == 0:  # Solo para la primera imagen
+            #     logger.info(f"RAW boxes range: min={img_preds_box.min():.3f}, max={img_preds_box.max():.3f}")
+            #     logger.info(f"RAW scores range: min={scores.min():.3f}, max={scores.max():.3f}")
             
             # Filtrar por confianza mínima
             keep = scores > self.nms.min_confidence
@@ -438,7 +438,7 @@ class PostProcess:
             }
             if is_segmentation:
                 results_dict["masks"] = final_masks
-            logger.info(f"Results dict final: {results_dict}")
+            
             results_list.append(results_dict)
 
         # Devolvemos una lista de diccionarios
